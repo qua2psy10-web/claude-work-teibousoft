@@ -261,6 +261,58 @@
             height: 46%; }
     #right { height: 54%; }
   }
+
+  /* ---------- 帳票（印刷用計算書） ---------- */
+  #printDoc {
+    display: none; position: fixed; inset: 0; z-index: 50; overflow-y: auto;
+    background: var(--bg);
+  }
+  #printDoc.open { display: block; }
+  .print-toolbar {
+    position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; align-items: center;
+    padding: 10px 22px; background: var(--panel); border-bottom: 1px solid var(--line-strong);
+  }
+  .print-toolbar .note { font-size: 0.78rem; color: var(--ink-dim); margin-left: 8px; }
+  .print-toolbar .spacer { flex: 1; }
+  .print-page {
+    max-width: 860px; margin: 18px auto 60px; background: var(--panel);
+    border: 1px solid var(--line-strong); padding: 34px 40px;
+  }
+  .print-page h1 {
+    font-size: 1.25rem; margin: 0 0 2px; letter-spacing: 0.02em;
+    border-bottom: 2px solid var(--soil); padding-bottom: 8px;
+  }
+  .print-page .doc-meta { font-size: 0.78rem; color: var(--ink-dim); margin: 6px 0 18px;
+                           display: flex; gap: 20px; flex-wrap: wrap; }
+  .print-page h2 {
+    font-size: 0.98rem; margin: 26px 0 8px; padding-left: 9px;
+    border-left: 4px solid var(--soil);
+  }
+  .print-page h3 { font-size: 0.88rem; margin: 18px 0 6px; }
+  table.rep {
+    border-collapse: collapse; width: 100%; font-size: 0.78rem; margin: 6px 0 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  table.rep th, table.rep td { border: 1px solid var(--line-strong); padding: 3px 7px; text-align: center; }
+  table.rep th { background: var(--panel-2); font-weight: 600; }
+  table.rep td.l { text-align: left; }
+  table.rep tr.sum td { font-weight: 700; background: var(--soil-tint); }
+  table.rep .ok { color: var(--ok); font-weight: 700; }
+  table.rep .ng { color: var(--danger); font-weight: 700; }
+  .rep-note { font-size: 0.72rem; color: var(--ink-dim); margin: 2px 0 10px; }
+  .slice-wrap { overflow-x: auto; }
+  .print-fig { border: 1px solid var(--line); padding: 6px; margin: 6px 0 4px; }
+  .print-fig svg { width: 100%; height: auto; display: block; }
+  .pagebreak { break-before: page; }
+
+  @media print {
+    body { height: auto; overflow: visible; background: #fff; }
+    header, main { display: none !important; }
+    #printDoc { position: static; overflow: visible; background: #fff; }
+    #printDoc:not(.open) { display: none; }
+    .print-toolbar { display: none; }
+    .print-page { border: none; max-width: none; margin: 0; padding: 0 6mm; }
+  }
 </style>
 </head>
 <body>
@@ -273,9 +325,11 @@
   </div>
   <div class="spacer"></div>
   <div class="toolbar">
+    <label class="chk"><input type="checkbox" id="sens"> 感度分析</label>
     <label class="chk"><input type="checkbox" id="darkToggle"> ダーク</label>
     <button class="ghost" id="btnLoad">JSON読込</button>
     <button class="ghost" id="btnSave">JSON保存</button>
+    <button class="ghost" id="btnPrint" disabled title="照査実行後に利用できます">帳票</button>
     <button class="primary" id="btnRun">照査実行</button>
     <input type="file" id="fileInput" accept=".json" style="display:none">
   </div>
@@ -310,13 +364,23 @@
     </div>
     <div class="note-strip">
       対応: 円弧すべり（修正フェレニウス法/簡易ビショップ法）・上載荷重・外水位・浸潤線自動推定（カサグランデ）・
-      テンションクラック・探索拘束・液状化(FL法)・入力診断。<br>
-      対策工の比較・感度分析・ニューマーク法（滑動変位量）は現時点では未対応です（teibo CLI/Python版で利用可能）。
+      テンションクラック・探索拘束・液状化(FL法)・ニューマーク法（滑動変位量）・
+      対策工の比較（押え盛土・地盤改良・ドレーン）・感度分析・入力診断・帳票出力。<br>
       入出力はteibo CLIと同じJSON形式のため、このシートで作った入力はそのまま
       <code>python -m teibo analyze</code> に渡せます。
     </div>
   </div>
 </main>
+
+<div id="printDoc">
+  <div class="print-toolbar">
+    <button class="primary" id="btnDoPrint">印刷 / PDF保存</button>
+    <span class="note">ブラウザの印刷ダイアログで「PDFに保存」を選ぶとPDFになります。</span>
+    <span class="spacer"></span>
+    <button id="btnClosePrint">閉じる</button>
+  </div>
+  <div class="print-page" id="printPage"></div>
+</div>
 
 <script>
 'use strict';
@@ -434,6 +498,13 @@ function soilAt(section, x, y) {
   }
   if (y > tops[0][0]) return tops[0][1];
   return tops[n - 1][1];
+}
+
+function improvementAt(section, x, y) {
+  for (const z of (section.improvements || [])) {
+    if (z.x_start <= x && x <= z.x_end && z.y_bottom <= y && y <= z.y_top) return z;
+  }
+  return null;
 }
 
 function porePressure(section, x, ySlip) {
@@ -558,9 +629,13 @@ function buildSlices(section, xc, yc, r, n, caseObj) {
     const baseLen = cosA > 1e-9 ? width / cosA : width;
     let u = porePressure(section, xm, ya);
     const layer = soilAt(section, xm, ya);
-    const c = layer ? layer.c : 0, phi = layer ? layer.phi * Math.PI / 180 : 0;
+    // 地盤改良範囲内は改良後の c・φ を用い、液状化判定の対象外とする
+    const zone = improvementAt(section, xm, ya);
+    let c, phi;
+    if (zone) { c = zone.c; phi = zone.phi * Math.PI / 180; }
+    else { c = layer ? layer.c : 0; phi = layer ? layer.phi * Math.PI / 180 : 0; }
     let fl = null;
-    if (caseObj && caseObj.consider_liquefaction && layer && layer.liquefaction && u > 0) {
+    if (!zone && caseObj && caseObj.consider_liquefaction && layer && layer.liquefaction && u > 0) {
       const sigmaV = columnWeight(section, xm, ya, ys) + waterOverburden(section, xm);
       const sigmaVEff = Math.max(sigmaV - u, 1e-6);
       fl = flValue(layer.liquefaction.n_value, layer.liquefaction.fines_content || 0,
@@ -713,6 +788,141 @@ function sectionForCase(section, caseObj) {
 function runAll(section, cases, grid) {
   return cases.map(c => searchCritical(sectionForCase(section, c), c, grid));
 }
+
+/* =========================================================================
+   対策工（押え盛土・地盤改良・ドレーン）
+   ========================================================================= */
+function mergedSurface(surf, bermTop) {
+  let xs = Array.from(new Set(surf.map(p => p[0]).concat(bermTop.map(p => p[0]))))
+    .sort((a, b) => a - b)
+    .filter(x => x >= surf[0][0] && x <= surf[surf.length - 1][0]);
+  const extra = [];
+  for (let i = 0; i < xs.length - 1; i++) {
+    const a = xs[i], b = xs[i + 1];
+    const ysA = interpPolyline(surf, a), ysB = interpPolyline(surf, b);
+    const ybA = interpPolyline(bermTop, a), ybB = interpPolyline(bermTop, b);
+    if (ysA == null || ysB == null || ybA == null || ybB == null) continue;
+    const da = ybA - ysA, db = ybB - ysB;
+    if (da * db < 0) { const t = da / (da - db); extra.push(a + t * (b - a)); }
+  }
+  xs = Array.from(new Set(xs.concat(extra))).sort((a, b) => a - b);
+  const pts = [];
+  for (const x of xs) {
+    const ys = interpPolyline(surf, x);
+    if (ys == null) continue;
+    const yb = interpPolyline(bermTop, x);
+    pts.push([x, yb != null ? Math.max(ys, yb) : ys]);
+  }
+  return pts;
+}
+
+function applyCountermeasure(section, cm) {
+  const sec = JSON.parse(JSON.stringify(section));
+  if (cm.berm && cm.berm.top && cm.berm.top.length >= 2) {
+    const ns = mergedSurface(sec.layers[0].top, cm.berm.top);
+    sec.layers.unshift({
+      name: cm.berm.name || '押え盛土', top: ns,
+      gamma: numOr(cm.berm.gamma, 18), gamma_sat: numOr(cm.berm.gamma_sat, numOr(cm.berm.gamma, 18)),
+      c: numOr(cm.berm.c, 0), phi: numOr(cm.berm.phi, 0), liquefaction: null,
+    });
+  }
+  const zones = (cm.improvements || []).concat(cm.improvement ? [cm.improvement] : []);
+  if (zones.length) sec.improvements = (sec.improvements || []).concat(zones);
+  if (cm.phreatic && cm.phreatic.length >= 2) { sec.phreatic = cm.phreatic; sec.phreatic_estimated = false; }
+  sec.name = `${section.name || '断面'}（${cm.name || '対策工'}）`;
+  return sec;
+}
+
+function runCountermeasures(section, cases, grid, cms) {
+  return cms.map(cm => {
+    const sec = applyCountermeasure(section, cm);
+    return { countermeasure: cm, section: sec, results: runAll(sec, cases, grid) };
+  });
+}
+
+/* =========================================================================
+   ニューマーク法
+   ========================================================================= */
+function yieldKh(slices, extraDriving, method) {
+  const fsFunc = method === 'bishop' ? bishopFs : felleniusFs;
+  const fs = kh => fsFunc(slices, kh, extraDriving);
+  const f0 = fs(0);
+  if (f0 == null) return null;
+  if (f0 <= 1) return 0;
+  const khMax = 2.0;
+  const fh = fs(khMax);
+  if (fh == null) return null;
+  if (fh > 1) return khMax;
+  let lo = 0, hi = khMax;
+  for (let i = 0; i < 100; i++) {
+    const mid = 0.5 * (lo + hi), fm = fs(mid);
+    if (fm == null) return null;
+    if (fm > 1) lo = mid; else hi = mid;
+    if (hi - lo < 1e-4) break;
+  }
+  return 0.5 * (lo + hi);
+}
+function displacementEmpirical(ky, kmax) {
+  if (kmax <= 0) return 0;
+  if (ky >= kmax) return 0;
+  if (ky <= 0) return null;
+  const ratio = ky / kmax;
+  const logD = 0.90 + Math.log10(Math.pow(1 - ratio, 2.53) * Math.pow(ratio, -1.09));
+  return Math.pow(10, logD) / 100; // cm → m
+}
+function displacementTimeHistory(accel, ky) {
+  if (ky < 0 || !accel || accel.length < 2) return null;
+  const ay = ky * GAMMA_W;
+  let v = 0, d = 0;
+  for (let i = 1; i < accel.length; i++) {
+    const dt = accel[i][0] - accel[i - 1][0];
+    if (dt <= 0) continue;
+    const a = 0.5 * (Math.abs(accel[i - 1][1]) + Math.abs(accel[i][1])) / 100; // gal → m/s2
+    if (v > 0 || a > ay) {
+      v += (a - ay) * dt;
+      if (v < 0) v = 0; else d += v * dt;
+    }
+  }
+  return d;
+}
+function runNewmark(results, accelSeries) {
+  const out = [];
+  for (const r of results) {
+    const c = r.case;
+    if (!c.newmark) continue;
+    const allowable = c.allowable_displacement != null ? c.allowable_displacement : 0.5;
+    if (!r.critical) { out.push({ case: c, ky: null, kmax: c.kh, displacement: null, allowable, usedTh: false }); continue; }
+    const ky = yieldKh(r.critical.slices, r.critical.extraDriving, c.method);
+    let d = null, usedTh = false;
+    if (ky != null) {
+      if (accelSeries && accelSeries.length) { d = displacementTimeHistory(accelSeries, ky); usedTh = true; }
+      else d = displacementEmpirical(ky, c.kh);
+    }
+    out.push({ case: c, ky, kmax: c.kh, displacement: d, allowable, usedTh });
+  }
+  return out;
+}
+
+/* =========================================================================
+   感度分析
+   ========================================================================= */
+function runSensitivity(section, cases, grid, targets) {
+  const out = [];
+  for (const t of targets) {
+    const table = { target: t, caseNames: cases.map(c => c.name), rows: [] };
+    for (const v of t.values) {
+      const sec = JSON.parse(JSON.stringify(section));
+      const ly = sec.layers.find(l => l.name === t.layer);
+      if (!ly) throw new Error(`感度分析: 層「${t.layer}」が見つかりません`);
+      ly[t.param] = v;
+      const rs = runAll(sec, cases, grid);
+      table.rows.push({ value: v, fs: rs.map(r => r.critical ? r.critical.fs : null) });
+    }
+    out.push(table);
+  }
+  return out;
+}
+const PARAM_LABELS = { c: 'c (kN/m²)', phi: 'φ (度)', gamma: 'γt (kN/m³)', gamma_sat: 'γsat (kN/m³)' };
 
 /* =========================================================================
    浸潤線の自動推定（カサグランデの基本放物線）
@@ -943,7 +1153,19 @@ function buildCaseSvg(section, result, sx, sy, w, h) {
     points: polyPts(surf, sx, sy), fill: 'none', stroke: 'var(--soil-deep)', 'stroke-width': 2.4
   }));
 
-  // 地盤改良の代わりはなし（対策工未対応）
+  // 地盤改良範囲（緑の破線矩形）
+  for (const z of (section.improvements || [])) {
+    const x0 = sx(z.x_start), y0 = sy(z.y_top), x1 = sx(z.x_end), y1 = sy(z.y_bottom);
+    svg.appendChild(svgEl('rect', {
+      x: x0.toFixed(1), y: y0.toFixed(1),
+      width: (x1 - x0).toFixed(1), height: (y1 - y0).toFixed(1),
+      fill: 'var(--ok)', opacity: 0.13, stroke: 'var(--ok)',
+      'stroke-width': 1.5, 'stroke-dasharray': '5,3'
+    }));
+    const t = svgEl('text', { x: ((x0 + x1) / 2).toFixed(1), y: (y0 - 4).toFixed(1), class: 'lbl ok', 'text-anchor': 'middle' });
+    t.textContent = z.name || '地盤改良';
+    svg.appendChild(t);
+  }
 
   // 外水
   if (section.external_water) {
@@ -1064,6 +1286,7 @@ function stampSvgStyle(svg) {
     text.lbl { font-size: 11px; font-family: ui-monospace, monospace; }
     text.lbl.water { fill: var(--water); }
     text.lbl.warn { fill: var(--warn); }
+    text.lbl.ok { fill: var(--ok); }
     text.lbl.fs { font-size: 13px; font-weight: 700; }
   `;
   svg.insertBefore(style, svg.firstChild);
@@ -1099,6 +1322,7 @@ function defaultState() {
    ========================================================================= */
 let state = defaultState();
 let activeTab = 'sheet';
+let lastRun = null;
 
 const $ = id => document.getElementById(id);
 const editor = $('editor');
@@ -1292,7 +1516,7 @@ function renderSheet() {
   const bodyC = el('div', { class: 'card-body' });
   state.cases = state.cases || [];
   const tbl = el('table', { class: 'grid-table' });
-  tbl.append(el('tr', null, ...['ケース名', 'kh', 'Fsa', '解析法', '液状化', ''].map(hh => el('th', null, hh))));
+  tbl.append(el('tr', null, ...['ケース名', 'kh', 'Fsa', '解析法', '液状化', 'ﾆｭｰﾏｰｸ', 'Da(m)', ''].map(hh => el('th', null, hh))));
   state.cases.forEach((c, i) => {
     tbl.append(el('tr', null,
       el('td', null, el('input', { type: 'text', value: c.name || '', oninput: ev => { c.name = ev.target.value; syncFromForm(); } })),
@@ -1307,6 +1531,16 @@ function renderSheet() {
           syncFromForm();
         }
       })),
+      el('td', null, el('input', {
+        type: 'checkbox', checked: !!c.newmark, onchange: ev => {
+          if (ev.target.checked) c.newmark = true; else delete c.newmark;
+          renderSheet(); syncFromForm();
+        }
+      })),
+      el('td', null, c.newmark ? el('input', {
+        type: 'number', step: 'any', value: c.allowable_displacement ?? 0.5,
+        oninput: ev => { c.allowable_displacement = num(ev.target.value); syncFromForm(); }
+      }) : '—'),
       el('td', null, el('button', { class: 'mini-btn del', type: 'button', onclick: () => { state.cases.splice(i, 1); renderSheet(); syncFromForm(); } }, '×'))
     ));
   });
@@ -1331,6 +1565,117 @@ function renderSheet() {
   bodyG.append(el('div', { class: 'field-row' }, gOpt('下限標高', 'y_lower_limit'), gOpt('始端x最小', 'x_entry_min'), gOpt('始端x最大', 'x_entry_max'), gOpt('終端x最小', 'x_exit_min'), gOpt('終端x最大', 'x_exit_max')));
   dGrid.append(bodyG);
   sheet.append(dGrid);
+
+  /* --- 対策工 --- */
+  const dCm = el('details', { class: 'card', open: (state.countermeasures && state.countermeasures.length) ? '' : null },
+    el('summary', null, '対策工（案の比較）'));
+  const bodyCm = el('div', { class: 'card-body' });
+  bodyCm.append(el('p', { class: 'hint' },
+    '各「案」で押え盛土・地盤改良・浸潤線差替（ドレーン工）を組み合わせ、無対策と Fs を比較します。'));
+  const cms = state.countermeasures = state.countermeasures || [];
+  cms.forEach((cm, i) => {
+    const card = el('div', { class: 'layer-card' });
+    card.append(el('div', { class: 'field-row' },
+      el('label', null, '案名', el('input', { type: 'text', size: 16, value: cm.name || '', oninput: ev => { cm.name = ev.target.value; syncFromForm(); } })),
+      el('button', { class: 'mini-btn del', type: 'button', onclick: () => { cms.splice(i, 1); renderSheet(); syncFromForm(); } }, 'この案を削除')));
+    // 押え盛土
+    const bermOn = !!cm.berm;
+    card.append(el('div', { class: 'field-row' },
+      el('label', null, el('input', {
+        type: 'checkbox', checked: bermOn, onchange: ev => {
+          if (ev.target.checked) {
+            const surf = (state.section.layers && state.section.layers[0] && state.section.layers[0].top) || [[0, 0], [10, 0]];
+            const xr = surf[surf.length - 1][0];
+            cm.berm = { top: [[xr - 12, 1.0], [xr - 9, 1.5], [xr - 5, 1.5], [xr - 2, 0]], gamma: 18, gamma_sat: 19, c: 5, phi: 30 };
+          } else delete cm.berm;
+          renderSheet(); syncFromForm();
+        }
+      }), '押え盛土')));
+    if (bermOn) {
+      card.append(el('div', { class: 'field-row' },
+        numField('γt', cm.berm.gamma, v => cm.berm.gamma = v),
+        numField('γsat', cm.berm.gamma_sat, v => cm.berm.gamma_sat = v),
+        numField('c', cm.berm.c, v => cm.berm.c = v),
+        numField('φ', cm.berm.phi, v => cm.berm.phi = v)));
+      card.append(el('div', { class: 'hint' }, '盛土後の表面形状（既存地表面より高い部分が盛土になる）'));
+      cm.berm.top = cm.berm.top || [[0, 0], [5, 1], [10, 0]];
+      card.append(pointsTable(cm.berm.top, renderSheet));
+    }
+    // 地盤改良
+    const zones = cm.improvements = cm.improvements || (cm.improvement ? [cm.improvement] : []);
+    delete cm.improvement;
+    card.append(el('div', { class: 'hint' }, '地盤改良（矩形範囲の c・φ を差し替え。液状化判定の対象外）'));
+    zones.forEach((z, j) => {
+      card.append(el('div', { class: 'field-row' },
+        numField('x開始', z.x_start, v => z.x_start = v),
+        numField('x終了', z.x_end, v => z.x_end = v),
+        numField('上端y', z.y_top, v => z.y_top = v),
+        numField('下端y', z.y_bottom, v => z.y_bottom = v),
+        numField('c', z.c, v => z.c = v),
+        numField('φ', z.phi, v => z.phi = v),
+        el('button', { class: 'mini-btn del', type: 'button', onclick: () => { zones.splice(j, 1); renderSheet(); syncFromForm(); } }, '×')));
+    });
+    card.append(el('button', {
+      class: 'mini-btn add', type: 'button', onclick: () => {
+        zones.push({ x_start: 0, x_end: 10, y_top: 0, y_bottom: -3, c: 100, phi: 0, name: '固化改良' });
+        renderSheet(); syncFromForm();
+      }
+    }, '＋ 改良範囲を追加'));
+    if (!zones.length) delete cm.improvements;
+    // 浸潤線差替
+    const drOn = !!cm.phreatic;
+    card.append(el('div', { class: 'field-row' },
+      el('label', null, el('input', {
+        type: 'checkbox', checked: drOn, onchange: ev => {
+          if (ev.target.checked) cm.phreatic = [[0, 1], [20, 0.5]]; else delete cm.phreatic;
+          renderSheet(); syncFromForm();
+        }
+      }), '浸潤線を差し替え（ドレーン工など）')));
+    if (drOn) card.append(pointsTable(cm.phreatic, renderSheet));
+    bodyCm.append(card);
+  });
+  bodyCm.append(el('button', {
+    class: 'mini-btn add', type: 'button', onclick: () => {
+      cms.push({ name: `案${cms.length + 1}` });
+      renderSheet(); syncFromForm();
+    }
+  }, '＋ 対策工の案を追加'));
+  if (!cms.length) delete state.countermeasures;
+  dCm.append(bodyCm);
+  sheet.append(dCm);
+
+  /* --- 感度分析 --- */
+  const dSens = el('details', { class: 'card', open: (state.sensitivity && state.sensitivity.length) ? '' : null },
+    el('summary', null, '感度分析'));
+  const bodyS = el('div', { class: 'card-body' });
+  bodyS.append(el('p', { class: 'hint' },
+    '指定した層のパラメータを複数の値で差し替えて Fs の変化を調べます。実行にはヘッダの「感度分析」チェックを ON にしてください。'));
+  const targets = state.sensitivity = state.sensitivity || [];
+  const layerNames = (state.section.layers || []).map(l => l.name || '土層');
+  targets.forEach((t, i) => {
+    bodyS.append(el('div', { class: 'field-row' },
+      el('label', null, '層', el('select', { onchange: ev => { t.layer = ev.target.value; syncFromForm(); } },
+        ...layerNames.map(nm => el('option', { value: nm, selected: t.layer === nm }, nm)))),
+      el('label', null, '項目', el('select', { onchange: ev => { t.param = ev.target.value; syncFromForm(); } },
+        ...Object.entries(PARAM_LABELS).map(([k, lbl]) => el('option', { value: k, selected: t.param === k }, lbl)))),
+      el('label', null, '値（カンマ区切り）', el('input', {
+        type: 'text', size: 16, value: (t.values || []).join(', '),
+        oninput: ev => {
+          t.values = ev.target.value.split(/[,、\s]+/).map(parseFloat).filter(v => !isNaN(v));
+          syncFromForm();
+        }
+      })),
+      el('button', { class: 'mini-btn del', type: 'button', onclick: () => { targets.splice(i, 1); renderSheet(); syncFromForm(); } }, '×')));
+  });
+  bodyS.append(el('button', {
+    class: 'mini-btn add', type: 'button', onclick: () => {
+      targets.push({ layer: layerNames[0] || '土層', param: 'c', values: [5, 10, 15] });
+      renderSheet(); syncFromForm();
+    }
+  }, '＋ 対象を追加'));
+  if (!targets.length) delete state.sensitivity;
+  dSens.append(bodyS);
+  sheet.append(dSens);
 }
 
 /* --- 同期・プレビュー --- */
@@ -1409,6 +1754,22 @@ runBtn.addEventListener('click', async () => {
     const warnings = validateInput(section, cases);
     const results = runAll(section, cases, grid);
 
+    // ニューマーク法（newmark: true のケース）
+    const nm = runNewmark(results, state.accel_series || null);
+
+    // 対策工の比較
+    let cms = null;
+    if (state.countermeasures && state.countermeasures.length) {
+      cms = runCountermeasures(section, cases, grid, state.countermeasures);
+    }
+
+    // 感度分析（ヘッダのチェックが ON のときのみ）
+    let sens = null;
+    const sensEl = document.getElementById('sens');
+    if (sensEl && sensEl.checked && state.sensitivity && state.sensitivity.length) {
+      sens = runSensitivity(section, cases, grid, state.sensitivity);
+    }
+
     // ピル（サマリ）
     pillrow.innerHTML = '';
     for (const r of results) {
@@ -1451,6 +1812,71 @@ runBtn.addEventListener('click', async () => {
       reportArea.append(block);
     });
 
+    // ニューマーク法の結果表
+    if (nm.length) {
+      const block = document.createElement('div');
+      block.className = 'case-block';
+      block.innerHTML = `<div class="case-head">ニューマーク法（滑動変位量）</div>`;
+      const body = document.createElement('div');
+      body.style.padding = '10px 14px';
+      body.innerHTML = newmarkTableHtml(nm);
+      block.append(body);
+      reportArea.append(block);
+    }
+
+    // 対策工の比較
+    if (cms) {
+      const block = document.createElement('div');
+      block.className = 'case-block';
+      block.innerHTML = `<div class="case-head">対策工の比較</div>`;
+      const body = document.createElement('div');
+      body.style.padding = '10px 14px';
+      body.innerHTML = cmCompareTableHtml(results, cms);
+      block.append(body);
+      reportArea.append(block);
+      for (const cmRes of cms) {
+        const t2 = makeTransform(cmRes.section, cmRes.results);
+        const b2 = document.createElement('div');
+        b2.className = 'case-block';
+        const hd = document.createElement('div');
+        hd.className = 'case-head';
+        hd.textContent = cmRes.countermeasure.name || '対策工';
+        b2.append(hd);
+        cmRes.results.forEach(rr => {
+          const secC = sectionForCase(cmRes.section, rr.case);
+          const host2 = document.createElement('div');
+          host2.style.padding = '8px 12px 2px';
+          host2.append(stampSvgStyle(buildCaseSvg(secC, rr, t2.sx, t2.sy, t2.w, t2.h)));
+          b2.append(host2);
+          const meta2 = document.createElement('div');
+          meta2.className = 'case-meta';
+          const okT = rr.critical ? (rr.critical.fs >= rr.case.allowable_fs ? 'OK' : 'NG') : '算定不能';
+          meta2.textContent = rr.critical
+            ? `${rr.case.name}: Fs=${rr.critical.fs.toFixed(3)}（${okT}）`
+            : `${rr.case.name}: 有効なすべり円なし`;
+          b2.append(meta2);
+        });
+        reportArea.append(b2);
+      }
+    }
+
+    // 感度分析
+    if (sens) {
+      const block = document.createElement('div');
+      block.className = 'case-block';
+      block.innerHTML = `<div class="case-head">感度分析</div>`;
+      const body = document.createElement('div');
+      body.style.padding = '10px 14px';
+      body.innerHTML = sens.map(sensTableHtml).join('');
+      block.append(body);
+      reportArea.append(block);
+    }
+
+    lastRun = { section, cases, results, nm, cms, sens, warnings,
+                when: new Date() };
+    $('btnPrint').disabled = false;
+    $('btnPrint').title = '計算書（印刷/PDF）を表示';
+
     if (warnings.length) {
       warnHost.innerHTML = `<div class="warnbox"><div class="wtitle">⚠ 入力診断</div>
         <ul>${warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>`;
@@ -1464,6 +1890,227 @@ runBtn.addEventListener('click', async () => {
     runBtn.disabled = false;
   }
 });
+
+/* --- 結果表 HTML ヘルパ --- */
+function newmarkTableHtml(nm) {
+  const rows = nm.map(n => {
+    const ky = n.ky != null ? n.ky.toFixed(3) : '—';
+    const d = n.displacement != null ? (n.displacement * 100).toFixed(1) : '—';
+    let judge, cls;
+    if (n.displacement == null) {
+      judge = n.ky === 0 ? '算定不能（流動的破壊のおそれ）' : '算定不能'; cls = 'ng';
+    } else if (n.displacement <= n.allowable) { judge = 'OK'; cls = 'ok'; }
+    else { judge = 'NG'; cls = 'ng'; }
+    const method = n.usedTh ? '時刻歴積分' : '経験式';
+    return `<tr><td class="l">${escapeHtml(n.case.name)}</td><td>${ky}</td>` +
+      `<td>${n.kmax.toFixed(3)}</td><td>${d}</td><td>${(n.allowable * 100).toFixed(0)}</td>` +
+      `<td>${method}</td><td class="${cls}">${escapeHtml(judge)}</td></tr>`;
+  }).join('');
+  return `<table class="rep"><tr><th>ケース</th><th>ky</th><th>kh</th><th>D (cm)</th>` +
+    `<th>Da (cm)</th><th>算定方法</th><th>判定</th></tr>${rows}</table>` +
+    `<p class="rep-note">降伏震度 ky: Fs(kh)=1 となる水平震度（二分法）。経験式: Ambraseys &amp; Menu (1988)。` +
+    `ky=0（震度によらず Fs≤1）は剛体ブロック法の適用外。</p>`;
+}
+
+function cmCompareTableHtml(results, cms) {
+  const names = ['無対策'].concat(cms.map(c => c.countermeasure.name || '対策工'));
+  const head = `<tr><th>ケース</th>${names.map(n => `<th>${escapeHtml(n)}</th>`).join('')}</tr>`;
+  const rows = results.map((r, i) => {
+    const cells = [results].concat(cms.map(c => c.results)).map(set => {
+      const rr = set[i];
+      if (!rr.critical) return '<td>—</td>';
+      const ok = rr.critical.fs >= rr.case.allowable_fs;
+      return `<td>${rr.critical.fs.toFixed(3)} <span class="${ok ? 'ok' : 'ng'}">${ok ? 'OK' : 'NG'}</span></td>`;
+    }).join('');
+    return `<tr><td class="l">${escapeHtml(r.case.name)}</td>${cells}</tr>`;
+  }).join('');
+  return `<table class="rep">${head}${rows}</table>`;
+}
+
+function sensTableHtml(tbl) {
+  const label = PARAM_LABELS[tbl.target.param] || tbl.target.param;
+  const head = `<tr><th>${escapeHtml(label)}</th>` +
+    tbl.caseNames.map(n => `<th>${escapeHtml(n)}</th>`).join('') + '</tr>';
+  const rows = tbl.rows.map(row =>
+    `<tr><td>${row.value}</td>` +
+    row.fs.map(f => `<td>${f != null ? f.toFixed(3) : '—'}</td>`).join('') + '</tr>').join('');
+  return `<h3>${escapeHtml(tbl.target.layer)} の ${escapeHtml(label)}</h3>` +
+    `<table class="rep">${head}${rows}</table>`;
+}
+
+/* --- 帳票（計算書）生成 --- */
+function sliceTableHtml(cr, caseObj) {
+  const kh = caseObj.kh;
+  const isBishop = caseObj.method === 'bishop';
+  const hasFl = cr.slices.some(s => s.fl != null);
+  let sumR = 0, sumD = cr.extraDriving || 0, rows = '';
+  cr.slices.forEach((s, i) => {
+    const sinA = Math.sin(s.alpha), cosA = Math.cos(s.alpha);
+    let resist;
+    if (isBishop) {
+      const tanPhi = Math.tan(s.phi);
+      const mA = cosA * (1 + Math.tan(s.alpha) * tanPhi / cr.fs);
+      resist = (s.c * s.width + (s.weight - s.u * s.width) * tanPhi) / mA;
+    } else {
+      const nEff = s.weight * cosA - kh * s.weight * sinA - s.u * s.baseLen;
+      resist = s.c * s.baseLen + Math.max(nEff, 0) * Math.tan(s.phi);
+    }
+    const drive = s.weight * sinA + kh * s.weight * cosA;
+    sumR += resist; sumD += drive;
+    rows += `<tr><td>${i + 1}</td><td>${s.xMid.toFixed(2)}</td><td>${s.width.toFixed(2)}</td>` +
+      `<td>${s.weight.toFixed(1)}</td><td>${(s.alpha * 180 / Math.PI).toFixed(1)}</td>` +
+      `<td>${s.baseLen.toFixed(2)}</td><td>${s.u.toFixed(1)}</td>` +
+      `<td>${s.c.toFixed(1)}</td><td>${(s.phi * 180 / Math.PI).toFixed(1)}</td>` +
+      (hasFl ? `<td>${s.fl != null ? s.fl.toFixed(2) : '—'}</td>` : '') +
+      `<td>${resist.toFixed(1)}</td><td>${drive.toFixed(1)}</td></tr>`;
+  });
+  const extraNote = (cr.extraDriving || 0) > 0
+    ? `<p class="rep-note">起動力合計にはクラック水圧の等価起動力 ${cr.extraDriving.toFixed(1)} kN/m を含む。</p>` : '';
+  const methodNote = isBishop
+    ? '<p class="rep-note">簡易ビショップ法: 抵抗力は収束後の Fs による mα で除した値。</p>' : '';
+  const flCol = hasFl ? '<th>FL</th>' : '';
+  const span = hasFl ? 10 : 9;
+  return `<div class="slice-wrap"><table class="rep">` +
+    `<tr><th>No</th><th>x (m)</th><th>b (m)</th><th>W (kN/m)</th><th>α (°)</th>` +
+    `<th>l (m)</th><th>u (kN/m²)</th><th>c (kN/m²)</th><th>φ (°)</th>${flCol}` +
+    `<th>抵抗力 (kN/m)</th><th>起動力 (kN/m)</th></tr>${rows}` +
+    `<tr class="sum"><td colspan="${span}" class="l">合計（Fs = Σ抵抗力 / Σ起動力 = ${sumR.toFixed(1)} / ${sumD.toFixed(1)}）</td>` +
+    `<td>${sumR.toFixed(1)}</td><td>${sumD.toFixed(1)}</td></tr>` +
+    `</table></div>${extraNote}${methodNote}`;
+}
+
+function buildPrintDoc(run) {
+  const page = $('printPage');
+  const d = run.when;
+  const dateStr = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  let html = `<h1>堤防安定性照査計算書</h1>
+    <div class="doc-meta">
+      <span>断面: <b>${escapeHtml(run.section.name || '無題')}</b></span>
+      <span>作成日: ${dateStr}</span>
+      <span>解析: teibo（円弧すべり・分割法）</span>
+    </div>`;
+
+  // 土層条件
+  html += `<h2>土層条件</h2><table class="rep">
+    <tr><th>層名</th><th>γt (kN/m³)</th><th>γsat (kN/m³)</th><th>c (kN/m²)</th><th>φ (°)</th><th>液状化特性</th></tr>`;
+  for (const ly of run.section.layers) {
+    const liq = ly.liquefaction ? `N=${ly.liquefaction.n_value}, FC=${ly.liquefaction.fines_content || 0}%` : '—';
+    html += `<tr><td class="l">${escapeHtml(ly.name)}</td><td>${ly.gamma.toFixed(1)}</td>` +
+      `<td>${ly.gamma_sat.toFixed(1)}</td><td>${ly.c.toFixed(1)}</td><td>${ly.phi.toFixed(1)}</td><td>${liq}</td></tr>`;
+  }
+  html += '</table>';
+
+  // 荷重・水条件
+  const conds = [];
+  if (run.section.phreatic) conds.push(run.section.phreatic_estimated ? '浸潤線: カサグランデ基本放物線による自動推定' : '浸潤線: 入力値');
+  else conds.push('浸潤線: なし（乾燥状態）');
+  if (run.section.external_water) conds.push('外水位: 設定あり（水重・間隙水圧に考慮）');
+  for (const sc of (run.section.surcharges || []))
+    conds.push(`${sc.name || '載荷重'}: x=${sc.x_start}〜${sc.x_end} m, q=${sc.q} kN/m²`);
+  if (run.section.tension_crack)
+    conds.push(`テンションクラック: 深さ zc=${run.section.tension_crack.depth} m, 水深 zw=${run.section.tension_crack.water_depth || 0} m`);
+  html += `<h2>荷重・水条件</h2><ul style="font-size:0.82rem">${conds.map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`;
+
+  if (run.warnings && run.warnings.length) {
+    html += `<h2>入力診断（警告）</h2><ul style="font-size:0.78rem">` +
+      run.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('') + '</ul>';
+  }
+
+  // 照査結果一覧
+  html += `<h2>照査結果一覧</h2><table class="rep">
+    <tr><th>ケース</th><th>解析法</th><th>kh</th><th>Fs</th><th>Fsa</th><th>判定</th></tr>`;
+  for (const r of run.results) {
+    const method = r.case.method === 'bishop' ? '簡易ビショップ法' : '修正フェレニウス法';
+    const fs = r.critical ? r.critical.fs.toFixed(3) : '—';
+    const ok = r.critical && r.critical.fs >= r.case.allowable_fs;
+    html += `<tr><td class="l">${escapeHtml(r.case.name)}</td><td>${method}</td>` +
+      `<td>${r.case.kh.toFixed(3)}</td><td>${fs}</td><td>${r.case.allowable_fs.toFixed(2)}</td>` +
+      `<td class="${ok ? 'ok' : 'ng'}">${r.critical ? (ok ? 'OK' : 'NG') : '算定不能'}</td></tr>`;
+  }
+  html += '</table>';
+  page.innerHTML = html;
+
+  // ケースごとの詳細（図＋スライス計算表）
+  const t = makeTransform(run.section, run.results);
+  run.results.forEach((r, idx) => {
+    const div = document.createElement('div');
+    div.className = idx > 0 ? 'pagebreak' : '';
+    let inner = `<h2>ケース: ${escapeHtml(r.case.name)}</h2>`;
+    if (r.critical) {
+      inner += `<p style="font-size:0.82rem" class="mono">臨界円 中心 (x=${r.critical.xc.toFixed(2)}, y=${r.critical.yc.toFixed(2)})　` +
+        `R=${r.critical.r.toFixed(2)} m　Fs=${r.critical.fs.toFixed(3)}　評価円数 ${r.evaluated}</p>`;
+    } else {
+      inner += '<p style="font-size:0.82rem">有効なすべり円が見つかりませんでした。</p>';
+    }
+    div.innerHTML = inner;
+    if (r.critical) {
+      const fig = document.createElement('div');
+      fig.className = 'print-fig';
+      fig.append(stampSvgStyle(buildCaseSvg(sectionForCase(run.section, r.case), r, t.sx, t.sy, t.w, t.h)));
+      div.append(fig);
+      const tblDiv = document.createElement('div');
+      tblDiv.innerHTML = `<h3>スライス計算表</h3>` + sliceTableHtml(r.critical, r.case);
+      div.append(tblDiv);
+    }
+    page.append(div);
+  });
+
+  // ニューマーク法
+  if (run.nm && run.nm.length) {
+    const div = document.createElement('div');
+    div.innerHTML = `<h2>ニューマーク法（滑動変位量）</h2>` + newmarkTableHtml(run.nm);
+    page.append(div);
+  }
+
+  // 対策工
+  if (run.cms) {
+    const div = document.createElement('div');
+    div.className = 'pagebreak';
+    div.innerHTML = `<h2>対策工の比較</h2>` + cmCompareTableHtml(run.results, run.cms);
+    page.append(div);
+    for (const cmRes of run.cms) {
+      const t2 = makeTransform(cmRes.section, cmRes.results);
+      const d2 = document.createElement('div');
+      d2.innerHTML = `<h3>${escapeHtml(cmRes.countermeasure.name || '対策工')}</h3>`;
+      cmRes.results.forEach(rr => {
+        if (!rr.critical) return;
+        const ok = rr.critical.fs >= rr.case.allowable_fs;
+        const p = document.createElement('p');
+        p.style.fontSize = '0.8rem'; p.className = 'mono';
+        p.textContent = `${rr.case.name}: Fs=${rr.critical.fs.toFixed(3)}（${ok ? 'OK' : 'NG'}）`;
+        d2.append(p);
+        const fig = document.createElement('div');
+        fig.className = 'print-fig';
+        fig.append(stampSvgStyle(buildCaseSvg(sectionForCase(cmRes.section, rr.case), rr, t2.sx, t2.sy, t2.w, t2.h)));
+        d2.append(fig);
+      });
+      page.append(d2);
+    }
+  }
+
+  // 感度分析
+  if (run.sens) {
+    const div = document.createElement('div');
+    div.innerHTML = `<h2>感度分析</h2>` + run.sens.map(sensTableHtml).join('');
+    page.append(div);
+  }
+
+  // 奥付
+  const foot = document.createElement('p');
+  foot.className = 'rep-note';
+  foot.style.marginTop = '26px';
+  foot.textContent = '本計算書は技術計算の補助を目的として teibo により自動生成されたものです。' +
+    '実務での設計・照査に用いる場合は、各基準・指針に基づき結果を必ず技術者が検証してください。';
+  page.append(foot);
+}
+
+$('btnPrint').addEventListener('click', () => {
+  if (!lastRun) return;
+  buildPrintDoc(lastRun);
+  $('printDoc').classList.add('open');
+});
+$('btnClosePrint').addEventListener('click', () => $('printDoc').classList.remove('open'));
+$('btnDoPrint').addEventListener('click', () => window.print());
 
 /* --- 読込・保存 --- */
 $('btnLoad').addEventListener('click', () => $('fileInput').click());
