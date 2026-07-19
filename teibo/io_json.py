@@ -169,10 +169,57 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
     if data.get("accel_series"):
         accel_series = _points(data["accel_series"])
 
+    countermeasures = []
+    if data.get("countermeasures"):
+        from .countermeasure import Berm, Countermeasure
+        from .model import ImprovementZone
+
+        for cm in data["countermeasures"]:
+            berm = None
+            if cm.get("berm"):
+                b = cm["berm"]
+                berm = Berm(
+                    top=_points(b["top"]),
+                    gamma=float(b["gamma"]),
+                    gamma_sat=float(b.get("gamma_sat", b["gamma"])),
+                    c=float(b.get("c", 0.0)),
+                    phi=float(b.get("phi", 0.0)),
+                    name=b.get("name", "押え盛土"),
+                )
+            zones = []
+            # "improvements"（複数）と "improvement"（単数）の両方を受ける
+            raw_zones = cm.get("improvements", [])
+            if cm.get("improvement"):
+                raw_zones = list(raw_zones) + [cm["improvement"]]
+            for z in raw_zones:
+                zones.append(
+                    ImprovementZone(
+                        x_start=float(z["x_start"]),
+                        x_end=float(z["x_end"]),
+                        y_top=float(z["y_top"]),
+                        y_bottom=float(z["y_bottom"]),
+                        c=float(z.get("c", 0.0)),
+                        phi=float(z.get("phi", 0.0)),
+                        name=z.get("name", "地盤改良"),
+                    )
+                )
+            cm_phreatic = None
+            if cm.get("phreatic"):
+                cm_phreatic = PhreaticLine(points=_points(cm["phreatic"]))
+            countermeasures.append(
+                Countermeasure(
+                    name=cm.get("name", "対策工"),
+                    berm=berm,
+                    improvements=zones,
+                    phreatic=cm_phreatic,
+                )
+            )
+
     return AnalysisInput(
         section=section,
         cases=cases,
         grid=grid,
         sensitivity=sensitivity,
         accel_series=accel_series,
+        countermeasures=countermeasures,
     )

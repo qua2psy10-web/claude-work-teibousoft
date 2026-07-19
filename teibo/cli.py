@@ -11,6 +11,8 @@ import argparse
 import sys
 from typing import List, Optional
 
+from .countermeasure import run_countermeasures
+from .diagnostics import validate_input
 from .io_json import load_input
 from .newmark import run_newmark
 from .report import html_report, sensitivity_text_report, text_report
@@ -81,8 +83,18 @@ def _cmd_analyze(args) -> int:
         print(f"エラー: 入力の読み込みに失敗しました: {e}", file=sys.stderr)
         return 2
 
+    warnings = validate_input(data) or None
+    if warnings:
+        for w in warnings:
+            print(f"警告: {w}", file=sys.stderr)
+
     results = run_all(data.section, data.cases, data.grid)
     nm = run_newmark(results, data.accel_series) or None
+    cms = None
+    if data.countermeasures:
+        cms = run_countermeasures(
+            data.section, data.cases, data.grid, data.countermeasures
+        )
 
     sens = None
     if args.sensitivity:
@@ -97,13 +109,28 @@ def _cmd_analyze(args) -> int:
             )
 
     if not args.quiet:
-        print(text_report(data.section, results, newmark=nm))
+        print(
+            text_report(
+                data.section,
+                results,
+                newmark=nm,
+                countermeasures=cms,
+                warnings=warnings,
+            )
+        )
         if sens:
             print()
             print(sensitivity_text_report(sens))
 
     if args.html:
-        html = html_report(data.section, results, sensitivity=sens, newmark=nm)
+        html = html_report(
+            data.section,
+            results,
+            sensitivity=sens,
+            newmark=nm,
+            countermeasures=cms,
+            warnings=warnings,
+        )
         with open(args.html, "w", encoding="utf-8") as f:
             f.write(html)
         print(f"\nHTML レポートを出力しました: {args.html}")

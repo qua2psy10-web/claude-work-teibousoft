@@ -16,6 +16,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
+from .countermeasure import run_countermeasures
+from .diagnostics import validate_input
 from .io_json import parse_input
 from .newmark import run_newmark
 from .report import html_report, section_svg
@@ -108,10 +110,11 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             data = parse_input(body.get("input", body))
             svg = section_svg(data.section)
+            warnings = validate_input(data)
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": f"入力エラー: {e}"})
             return
-        self._send_json({"svg": svg})
+        self._send_json({"svg": svg, "warnings": warnings})
 
     def _api_analyze(self, body: dict) -> None:
         try:
@@ -120,15 +123,26 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"error": f"入力エラー: {e}"})
             return
         try:
+            warnings = validate_input(data) or None
             results = run_all(data.section, data.cases, data.grid)
             nm = run_newmark(results, data.accel_series) or None
+            cms = None
+            if data.countermeasures:
+                cms = run_countermeasures(
+                    data.section, data.cases, data.grid, data.countermeasures
+                )
             sens = None
             if body.get("sensitivity") and data.sensitivity:
                 sens = run_sensitivity(
                     data.section, data.cases, data.grid, data.sensitivity
                 )
             report = html_report(
-                data.section, results, sensitivity=sens, newmark=nm
+                data.section,
+                results,
+                sensitivity=sens,
+                newmark=nm,
+                countermeasures=cms,
+                warnings=warnings,
             )
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": f"解析エラー: {e}"})
@@ -276,7 +290,11 @@ async function updatePreview() {
     const data = await res.json();
     if (data.error) { setMsg(data.error, true); return; }
     preview.innerHTML = data.svg;
-    setMsg('プレビュー更新', false);
+    if (data.warnings && data.warnings.length) {
+      setMsg('⚠ ' + data.warnings.join(' ／ '), true);
+    } else {
+      setMsg('プレビュー更新', false);
+    }
   } catch (e) { setMsg('通信エラー: ' + e, true); }
 }
 editor.addEventListener('input', () => {

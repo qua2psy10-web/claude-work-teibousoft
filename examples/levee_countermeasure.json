@@ -1,0 +1,69 @@
+{
+  "section": {
+    "name": "河川堤防 対策工検討（押え盛土・地盤改良・ドレーン工）",
+    "layers": [
+      {
+        "name": "盛土（堤体）",
+        "top": [[-5, 0], [0, 0], [10, 5], [13, 5], [23, 0], [40, 0]],
+        "gamma": 18.0,
+        "gamma_sat": 19.0,
+        "c": 8.0,
+        "phi": 24.0
+      },
+      {
+        "name": "基礎地盤",
+        "top": [[-5, 0], [40, 0]],
+        "gamma": 17.0,
+        "gamma_sat": 18.0,
+        "c": 12.0,
+        "phi": 20.0
+      }
+    ],
+    "seepage": {
+      "water_level": 4.0,
+      "waterside": "left",
+      "tail_level": 0.0
+    },
+    "external_water": [[-5, 4], [8, 4]]
+  },
+  "cases": [
+    { "name": "常時", "kh": 0.0, "allowable_fs": 1.2 },
+    { "name": "地震時", "kh": 0.15, "allowable_fs": 1.0 }
+  ],
+  "grid": {
+    "nx": 10,
+    "ny": 10,
+    "nr": 8,
+    "n_slices": 30,
+    "x_entry_min": 8.0,
+    "y_lower_limit": -3.0
+  },
+  "countermeasures": [
+    {
+      "name": "案1: 押え盛土",
+      "berm": {
+        "top": [[21, 1.0], [23, 2.0], [28, 2.0], [32, 0]],
+        "gamma": 18.0,
+        "gamma_sat": 19.0,
+        "c": 5.0,
+        "phi": 30.0
+      }
+    },
+    {
+      "name": "案2: 法先地盤改良",
+      "improvement": {
+        "x_start": 17.0,
+        "x_end": 27.0,
+        "y_top": 1.0,
+        "y_bottom": -3.0,
+        "c": 100.0,
+        "phi": 0.0,
+        "name": "固化改良"
+      }
+    },
+    {
+      "name": "案3: ドレーン工（浸潤線低下）",
+      "phreatic": [[-5, 4], [8, 4], [13, 2.0], [20, 0.0], [40, 0.0]]
+    }
+  ]
+}
