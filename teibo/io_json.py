@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from .model import (
     AnalysisInput,
+    LiquefactionProps,
     LoadCase,
     PhreaticLine,
     Point,
@@ -34,6 +35,13 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
 
     layers: List[SoilLayer] = []
     for ly in sec["layers"]:
+        liq = None
+        if ly.get("liquefaction"):
+            lq = ly["liquefaction"]
+            liq = LiquefactionProps(
+                n_value=float(lq["n_value"]),
+                fines_content=float(lq.get("fines_content", 0.0)),
+            )
         layers.append(
             SoilLayer(
                 name=ly.get("name", "土層"),
@@ -42,6 +50,7 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
                 gamma_sat=float(ly.get("gamma_sat", ly["gamma"])),
                 c=float(ly.get("c", 0.0)),
                 phi=float(ly.get("phi", 0.0)),
+                liquefaction=liq,
             )
         )
 
@@ -114,6 +123,11 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
                 method=c.get("method", "fellenius"),
                 phreatic=case_phreatic,
                 external_water=case_ext,
+                consider_liquefaction=bool(c.get("consider_liquefaction", False)),
+                newmark=bool(c.get("newmark", False)),
+                allowable_displacement=float(
+                    c.get("allowable_displacement", 0.5)
+                ),
             )
         )
     if not cases:
@@ -151,6 +165,14 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
             )
         )
 
+    accel_series = None
+    if data.get("accel_series"):
+        accel_series = _points(data["accel_series"])
+
     return AnalysisInput(
-        section=section, cases=cases, grid=grid, sensitivity=sensitivity
+        section=section,
+        cases=cases,
+        grid=grid,
+        sensitivity=sensitivity,
+        accel_series=accel_series,
     )

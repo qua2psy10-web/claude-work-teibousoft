@@ -1,0 +1,62 @@
+{
+  "section": {
+    "name": "河川堤防 地震時照査（液状化・ニューマーク法デモ）",
+    "layers": [
+      {
+        "name": "盛土（堤体）",
+        "top": [[-5, 0], [0, 0], [10, 5], [13, 5], [23, 0], [40, 0]],
+        "gamma": 18.0,
+        "gamma_sat": 19.0,
+        "c": 10.0,
+        "phi": 25.0
+      },
+      {
+        "name": "緩い砂層（液状化対象）",
+        "top": [[-5, 0], [40, 0]],
+        "gamma": 17.0,
+        "gamma_sat": 18.0,
+        "c": 0.0,
+        "phi": 32.0,
+        "liquefaction": { "n_value": 12, "fines_content": 15 }
+      },
+      {
+        "name": "支持地盤",
+        "top": [[-5, -6], [40, -6]],
+        "gamma": 19.0,
+        "gamma_sat": 20.0,
+        "c": 30.0,
+        "phi": 35.0
+      }
+    ],
+    "phreatic": [[-5, -0.5], [0, -0.5], [10, 2.5], [13, 2.5], [23, -0.5], [40, -0.5]]
+  },
+  "cases": [
+    {
+      "name": "常時",
+      "kh": 0.0,
+      "allowable_fs": 1.2
+    },
+    {
+      "name": "地震時（液状化なし）",
+      "kh": 0.18,
+      "allowable_fs": 1.0,
+      "newmark": true,
+      "allowable_displacement": 0.5
+    },
+    {
+      "name": "地震時（液状化考慮）",
+      "kh": 0.18,
+      "allowable_fs": 1.0,
+      "consider_liquefaction": true,
+      "newmark": true,
+      "allowable_displacement": 0.5
+    }
+  ],
+  "grid": {
+    "nx": 12,
+    "ny": 12,
+    "nr": 10,
+    "n_slices": 40,
+    "y_lower_limit": -6.0
+  }
+}

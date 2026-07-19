@@ -7,12 +7,25 @@ import math
 from typing import List, Optional, Tuple
 
 from .model import Section
+from .newmark import NewmarkResult
 from .search import CaseResult, section_for_case
 from .sensitivity import SensitivityResult
 from .stability import CircleResult
 
 
-def text_report(section: Section, results: List[CaseResult]) -> str:
+def _min_fl(cr: Optional[CircleResult]) -> Optional[float]:
+    """臨界円のスライスのうち液状化判定対象の最小 FL。"""
+    if cr is None:
+        return None
+    fls = [s.fl for s in cr.slices if s.fl is not None]
+    return min(fls) if fls else None
+
+
+def text_report(
+    section: Section,
+    results: List[CaseResult],
+    newmark: Optional[List[NewmarkResult]] = None,
+) -> str:
     """コンソール向けテキストレポート。"""
     lines: List[str] = []
     lines.append("=" * 60)
@@ -65,6 +78,10 @@ def text_report(section: Section, results: List[CaseResult]) -> str:
         if c.external_water is not None:
             note = "外水なし" if not c.external_water else "ケース専用の外水位"
             lines.append(f"  外水位   : {note}")
+        if c.consider_liquefaction:
+            mfl = _min_fl(r.critical)
+            fl_txt = f"最小 FL = {mfl:.3f}" if mfl is not None else "判定対象なし"
+            lines.append(f"  液状化   : FL 法で考慮（{fl_txt}）")
         lines.append(f"  必要安全率: Fsa = {c.allowable_fs:.2f}")
         if r.critical is None:
             lines.append("  結果     : 有効なすべり円が見つかりませんでした")
@@ -77,6 +94,33 @@ def text_report(section: Section, results: List[CaseResult]) -> str:
         mark = "○ OK" if r.ok else "× NG"
         lines.append(f"  判定     : Fs={cr.fs:.3f} {'>=' if r.ok else '<'} Fsa={c.allowable_fs:.2f}  → {mark}")
         lines.append(f"  （評価円数: {r.evaluated}）")
+
+    if newmark:
+        lines.append("\n【ニューマーク法（滑動変位量）】")
+        for nm in newmark:
+            lines.append("-" * 60)
+            lines.append(f"  ケース   : {nm.case.name}")
+            if nm.ky is None:
+                lines.append("  結果     : 降伏震度を算定できませんでした")
+                continue
+            lines.append(f"  降伏震度 : ky = {nm.ky:.3f}（設計震度 kh = {nm.kmax:.3f}）")
+            method = "加速度波形の時刻歴積分" if nm.used_time_history else "経験式 (Ambraseys & Menu)"
+            if nm.displacement is None:
+                if nm.ky <= 0.0:
+                    lines.append(
+                        "  変位量   : 算定不能"
+                        "（ky=0: 震度によらず Fs≤1 のため剛体ブロック法の適用外。"
+                        "流動的破壊のおそれ）"
+                    )
+                else:
+                    lines.append(f"  変位量   : 算定不能（{method}）")
+                continue
+            lines.append(f"  変位量   : D = {nm.displacement*100:.1f} cm（{method}）")
+            mark = "○ OK" if nm.ok else "× NG"
+            lines.append(
+                f"  判定     : D={nm.displacement*100:.1f} cm "
+                f"{'<=' if nm.ok else '>'} Da={nm.allowable*100:.0f} cm  → {mark}"
+            )
     lines.append("=" * 60)
     return "\n".join(lines)
 
@@ -165,6 +209,7 @@ def html_report(
     section: Section,
     results: List[CaseResult],
     sensitivity: Optional[List[SensitivityResult]] = None,
+    newmark: Optional[List[NewmarkResult]] = None,
 ) -> str:
     """HTML レポート（SVG 断面図つき）。"""
     sx, sy, poly, w, h = _make_transform(section, results)
@@ -251,11 +296,40 @@ def html_report(
         parts.append(f"<h3>{html.escape(c.name)}</h3>")
         if r.critical:
             cr = r.critical
+            extra = ""
+            if r.case.consider_liquefaction:
+                mfl = _min_fl(cr)
+                if mfl is not None:
+                    extra = f"　最小 FL={mfl:.3f}（液状化考慮）"
+                else:
+                    extra = "　液状化: 判定対象なし"
             parts.append(
                 f"<p class='cinfo'>中心 (x={cr.xc:.2f}, y={cr.yc:.2f})　"
-                f"半径 R={cr.r:.2f} m　最小安全率 Fs={cr.fs:.3f}</p>"
+                f"半径 R={cr.r:.2f} m　最小安全率 Fs={cr.fs:.3f}{extra}</p>"
             )
         parts.append(svg)
+
+    # ニューマーク法
+    if newmark:
+        parts.append("<h2>ニューマーク法（滑動変位量）</h2>")
+        parts.append("<table class='result'>")
+        parts.append(
+            "<tr><th>ケース</th><th>ky</th><th>kh</th>"
+            "<th>D (cm)</th><th>Da (cm)</th><th>算定方法</th><th>判定</th></tr>"
+        )
+        for nm in newmark:
+            ky = f"{nm.ky:.3f}" if nm.ky is not None else "—"
+            d = f"{nm.displacement*100:.1f}" if nm.displacement is not None else "—"
+            method = "時刻歴積分" if nm.used_time_history else "経験式"
+            j = nm.judgement
+            cls = "ok" if j == "OK" else "ng"
+            parts.append(
+                f"<tr><td>{html.escape(nm.case.name)}</td><td>{ky}</td>"
+                f"<td>{nm.kmax:.3f}</td><td>{d}</td>"
+                f"<td>{nm.allowable*100:.0f}</td><td>{method}</td>"
+                f"<td class='{cls}'>{html.escape(j)}</td></tr>"
+            )
+        parts.append("</table>")
 
     # 感度分析
     if sensitivity:

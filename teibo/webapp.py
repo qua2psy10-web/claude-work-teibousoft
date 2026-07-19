@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
 from .io_json import parse_input
+from .newmark import run_newmark
 from .report import html_report, section_svg
 from .search import run_all
 from .sensitivity import run_sensitivity
@@ -120,12 +121,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             results = run_all(data.section, data.cases, data.grid)
+            nm = run_newmark(results, data.accel_series) or None
             sens = None
             if body.get("sensitivity") and data.sensitivity:
                 sens = run_sensitivity(
                     data.section, data.cases, data.grid, data.sensitivity
                 )
-            report = html_report(data.section, results, sensitivity=sens)
+            report = html_report(
+                data.section, results, sensitivity=sens, newmark=nm
+            )
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": f"解析エラー: {e}"})
             return

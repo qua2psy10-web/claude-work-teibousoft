@@ -15,6 +15,7 @@ v0.2 での拡張:
 
 from .model import (
     AnalysisInput,
+    LiquefactionProps,
     LoadCase,
     PhreaticLine,
     Point,
@@ -26,16 +27,23 @@ from .model import (
     TensionCrack,
 )
 from .io_json import load_input, parse_input
+from .liquefaction import fl_value, ru_from_fl
+from .newmark import NewmarkResult, run_newmark
 from .search import CaseResult, run_all, search_critical, section_for_case
 from .seepage import estimate_phreatic
 from .sensitivity import SensitivityResult, run_sensitivity
 from .stability import CircleResult, Slice, SlipSurface, analyze_circle
 from .report import html_report, sensitivity_text_report, text_report
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "AnalysisInput",
+    "LiquefactionProps",
+    "fl_value",
+    "ru_from_fl",
+    "NewmarkResult",
+    "run_newmark",
     "LoadCase",
     "PhreaticLine",
     "Point",
