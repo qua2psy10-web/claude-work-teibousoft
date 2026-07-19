@@ -129,6 +129,30 @@ class TensionCrack:
 
 
 @dataclass
+class ImprovementZone:
+    """地盤改良（置換・固化改良等）の範囲。
+
+    矩形範囲 [x_start, x_end] × [y_bottom, y_top] 内のすべり面では
+    土層の c・φ に代えて改良後の c・φ を用いる（単位体積重量は
+    元の土層のまま）。改良範囲は液状化判定の対象外とする。
+    """
+
+    x_start: float
+    x_end: float
+    y_top: float
+    y_bottom: float
+    c: float
+    phi: float
+    name: str = "地盤改良"
+
+    def __post_init__(self) -> None:
+        if self.x_end <= self.x_start:
+            raise ValueError(f"改良範囲 '{self.name}': x_end > x_start が必要です")
+        if self.y_top <= self.y_bottom:
+            raise ValueError(f"改良範囲 '{self.name}': y_top > y_bottom が必要です")
+
+
+@dataclass
 class Section:
     """堤防断面。
 
@@ -146,6 +170,8 @@ class Section:
     external_water: Optional[List[Point]] = None
     # テンションクラック
     tension_crack: Optional[TensionCrack] = None
+    # 地盤改良範囲（対策工の照査などで使用）
+    improvements: List[ImprovementZone] = field(default_factory=list)
     # 浸潤線が自動推定によるものかどうか（レポート注記用）
     phreatic_estimated: bool = False
 
@@ -261,3 +287,5 @@ class AnalysisInput:
     # ニューマーク法の時刻歴計算に用いる加速度波形 [(時刻 s, 加速度 gal)]。
     # None の場合は経験式（Ambraseys & Menu）で変位量を推定する。
     accel_series: Optional[List[Point]] = None
+    # 対策工の案（countermeasure.Countermeasure のリスト。循環回避のため型は緩く保持）
+    countermeasures: List[object] = field(default_factory=list)

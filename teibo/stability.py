@@ -14,6 +14,7 @@ from .geometry import (
     arc_lower_y,
     column_weight,
     find_arc_surface_intersections,
+    improvement_at,
     pore_pressure,
     soil_at,
     surface_y,
@@ -205,13 +206,20 @@ def build_slices(
         u = pore_pressure(section, xm, ya)
 
         layer = soil_at(section, xm, ya)
-        c = layer.c if layer else 0.0
-        phi = math.radians(layer.phi) if layer else 0.0
+        # 地盤改良範囲内は改良後の c・φ を用い、液状化判定の対象外とする
+        zone = improvement_at(section, xm, ya)
+        if zone is not None:
+            c = zone.c
+            phi = math.radians(zone.phi)
+        else:
+            c = layer.c if layer else 0.0
+            phi = math.radians(layer.phi) if layer else 0.0
 
         # 液状化（FL 法）: 液状化特性を持つ飽和層で過剰間隙水圧を加算
         fl = None
         if (
-            case is not None
+            zone is None
+            and case is not None
             and case.consider_liquefaction
             and layer is not None
             and layer.liquefaction is not None

@@ -6,6 +6,7 @@ import html
 import math
 from typing import List, Optional, Tuple
 
+from .countermeasure import CountermeasureResult
 from .model import Section
 from .newmark import NewmarkResult
 from .search import CaseResult, section_for_case
@@ -25,12 +26,19 @@ def text_report(
     section: Section,
     results: List[CaseResult],
     newmark: Optional[List[NewmarkResult]] = None,
+    countermeasures: Optional[List[CountermeasureResult]] = None,
+    warnings: Optional[List[str]] = None,
 ) -> str:
     """コンソール向けテキストレポート。"""
     lines: List[str] = []
     lines.append("=" * 60)
     lines.append(f" 堤防安定性照査結果 : {section.name}")
     lines.append("=" * 60)
+
+    if warnings:
+        lines.append("\n【入力診断】")
+        for w in warnings:
+            lines.append(f"  ⚠ {w}")
 
     lines.append("\n【土層条件】")
     lines.append(
@@ -121,6 +129,27 @@ def text_report(
                 f"  判定     : D={nm.displacement*100:.1f} cm "
                 f"{'<=' if nm.ok else '>'} Da={nm.allowable*100:.0f} cm  → {mark}"
             )
+
+    if countermeasures:
+        lines.append("\n【対策工の比較】")
+        names = ["無対策"] + [c.countermeasure.name for c in countermeasures]
+        header = f"  {'ケース':<14}|" + "".join(f"{n:>16}" for n in names)
+        lines.append(header)
+        lines.append("  " + "-" * (len(header) - 2))
+        for i, r in enumerate(results):
+            cells = []
+            for res_set in [results] + [c.results for c in countermeasures]:
+                rr = res_set[i]
+                if rr.critical is None:
+                    cells.append(f"{'—':>16}")
+                else:
+                    mark = "○" if rr.ok else "×"
+                    cells.append(f"{f'{rr.critical.fs:.3f} {mark}':>16}")
+            lines.append(f"  {r.case.name:<14}|" + "".join(cells))
+        for c in countermeasures:
+            judge = "全ケース OK" if c.all_ok else "NG ケースあり"
+            lines.append(f"  → {c.countermeasure.name}: {judge}")
+
     lines.append("=" * 60)
     return "\n".join(lines)
 
@@ -210,6 +239,8 @@ def html_report(
     results: List[CaseResult],
     sensitivity: Optional[List[SensitivityResult]] = None,
     newmark: Optional[List[NewmarkResult]] = None,
+    countermeasures: Optional[List[CountermeasureResult]] = None,
+    warnings: Optional[List[str]] = None,
 ) -> str:
     """HTML レポート（SVG 断面図つき）。"""
     sx, sy, poly, w, h = _make_transform(section, results)
@@ -225,6 +256,12 @@ def html_report(
     parts.append("<!-- teibo stability report -->")
     parts.append(f"<h1>堤防安定性照査レポート</h1>")
     parts.append(f"<p class='sub'>断面: {html.escape(section.name)}</p>")
+
+    if warnings:
+        parts.append("<div class='warnbox'><strong>入力診断（警告）</strong><ul>")
+        for wmsg in warnings:
+            parts.append(f"<li>{html.escape(wmsg)}</li>")
+        parts.append("</ul></div>")
 
     # 土層表
     parts.append("<h2>土層条件</h2>")
@@ -331,6 +368,44 @@ def html_report(
             )
         parts.append("</table>")
 
+    # 対策工の比較
+    if countermeasures:
+        parts.append("<h2>対策工の比較</h2>")
+        names = ["無対策"] + [c.countermeasure.name for c in countermeasures]
+        parts.append("<table class='result'>")
+        head = "".join(f"<th>{html.escape(n)}</th>" for n in names)
+        parts.append(f"<tr><th>ケース</th>{head}</tr>")
+        for i, r in enumerate(results):
+            cells = []
+            for res_set in [results] + [c.results for c in countermeasures]:
+                rr = res_set[i]
+                if rr.critical is None:
+                    cells.append("<td>—</td>")
+                else:
+                    cls = "ok" if rr.ok else "ng"
+                    cells.append(
+                        f"<td>{rr.critical.fs:.3f} "
+                        f"<span class='{cls}'>{rr.judgement}</span></td>"
+                    )
+            parts.append(
+                f"<tr><td>{html.escape(r.case.name)}</td>{''.join(cells)}</tr>"
+            )
+        parts.append("</table>")
+
+        for c in countermeasures:
+            parts.append(f"<h3>{html.escape(c.countermeasure.name)}</h3>")
+            csx, csy, cpoly, cw, ch = _make_transform(c.section, c.results)
+            for rr in c.results:
+                sec_c = section_for_case(c.section, rr.case)
+                if rr.critical:
+                    parts.append(
+                        f"<p class='cinfo'>{html.escape(rr.case.name)}: "
+                        f"Fs={rr.critical.fs:.3f}（{rr.judgement}）</p>"
+                    )
+                parts.append(
+                    _svg_for_case(sec_c, rr, csx, csy, cpoly, cw, ch)
+                )
+
     # 感度分析
     if sensitivity:
         parts.append("<h2>感度分析</h2>")
@@ -385,6 +460,20 @@ def _svg_for_case(
         f"<polyline points='{poly(surf)}' fill='none' "
         f"stroke='#5a4a2a' stroke-width='2.5'/>"
     )
+
+    # 地盤改良範囲（緑の破線矩形）
+    for z in section.improvements:
+        x0, y0 = sx(z.x_start), sy(z.y_top)
+        x1, y1 = sx(z.x_end), sy(z.y_bottom)
+        elems.append(
+            f"<rect x='{x0:.1f}' y='{y0:.1f}' width='{x1-x0:.1f}' "
+            f"height='{y1-y0:.1f}' fill='#1a7f37' opacity='0.15' "
+            f"stroke='#1a7f37' stroke-width='1.5' stroke-dasharray='5,3'/>"
+        )
+        elems.append(
+            f"<text x='{(x0+x1)/2:.1f}' y='{y0-4:.1f}' class='implbl'>"
+            f"{z.name}</text>"
+        )
 
     # 外水（地表面より上の水域を塗る）
     if section.external_water:
@@ -562,6 +651,15 @@ _HTML_TEMPLATE = """<style>
   text.fslbl { font-size: 13px; font-weight: bold; }
   text.wlbl { font-size: 11px; fill: #1e73c8; }
   text.qlbl { font-size: 11px; fill: #b05a00; text-anchor: middle; }
+  text.implbl { font-size: 11px; fill: #1a7f37; text-anchor: middle; }
+  span.ok { color: #1a7f37; font-weight: bold; }
+  span.ng { color: #c0392b; font-weight: bold; }
+  .warnbox { background: #fff6d9; border: 1px solid #d4a900; border-radius: 6px;
+             padding: 10px 14px; margin: 12px 0; font-size: 0.92rem; }
+  .warnbox ul { margin: 6px 0 0; padding-left: 20px; }
+  @media (prefers-color-scheme: dark) {
+    .warnbox { background: #3a3010; border-color: #8a7a20; }
+  }
   @media (prefers-color-scheme: dark) {
     body { background: #1c1c1e; color: #e6e6e6; }
     th { background: #3a3320; }

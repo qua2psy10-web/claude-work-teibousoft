@@ -208,6 +208,14 @@ def soil_at(section: Section, x: float, y: float) -> Optional[SoilLayer]:
     return tops[-1][1]
 
 
+def improvement_at(section: Section, x: float, y: float):
+    """(x, y) を含む地盤改良範囲を返す（なければ None）。"""
+    for z in section.improvements:
+        if z.x_start <= x <= z.x_end and z.y_bottom <= y <= z.y_top:
+            return z
+    return None
+
+
 def pore_pressure(section: Section, x: float, y_slip: float) -> float:
     """すべり面上の間隙水圧 u (kN/m2)。
 
