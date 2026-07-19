@@ -222,4 +222,8 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
         sensitivity=sensitivity,
         accel_series=accel_series,
         countermeasures=countermeasures,
+        station=data.get("station"),
+        distance=(
+            float(data["distance"]) if data.get("distance") is not None else None
+        ),
     )

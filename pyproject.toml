@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "teibo"
-version = "0.6.0"
+version = "0.7.0"
 description = "堤防の円弧すべり安定性照査ツール（分割法：修正フェレニウス法／簡易ビショップ法）"
 readme = "README.md"
 requires-python = ">=3.9"
