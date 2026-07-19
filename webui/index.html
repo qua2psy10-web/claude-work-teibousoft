@@ -1,0 +1,1501 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>堤体すべり安定計算 | teibo</title>
+<style>
+  :root {
+    --bg: #f3ede1;
+    --panel: #fffdf8;
+    --panel-2: #ece3d0;
+    --ink: #2a2318;
+    --ink-dim: #6b6152;
+    --line: rgba(42,35,24,0.16);
+    --line-strong: rgba(42,35,24,0.32);
+    --soil: #7a5a34;
+    --soil-deep: #4f3a22;
+    --soil-tint: rgba(122,90,52,0.10);
+    --water: #2f6fa8;
+    --water-tint: rgba(47,111,168,0.16);
+    --ok: #1d7a4c;
+    --ok-tint: rgba(29,122,76,0.14);
+    --warn: #a8720a;
+    --warn-tint: rgba(168,114,10,0.14);
+    --danger: #ab3a2c;
+    --danger-tint: rgba(171,58,44,0.13);
+    --radius: 3px;
+    color-scheme: light dark;
+  }
+  :root[data-theme="dark"] {
+    --bg: #171310; --panel: #211c16; --panel-2: #2b241b;
+    --ink: #ece4d4; --ink-dim: #b3a891;
+    --line: rgba(236,228,212,0.14); --line-strong: rgba(236,228,212,0.28);
+    --soil: #d3a563; --soil-deep: #a97b3f; --soil-tint: rgba(211,165,99,0.12);
+    --water: #7fb0da; --water-tint: rgba(127,176,218,0.18);
+    --ok: #59b587; --ok-tint: rgba(89,181,135,0.16);
+    --warn: #d9a441; --warn-tint: rgba(217,164,65,0.16);
+    --danger: #e2685a; --danger-tint: rgba(226,104,90,0.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #171310; --panel: #211c16; --panel-2: #2b241b;
+      --ink: #ece4d4; --ink-dim: #b3a891;
+      --line: rgba(236,228,212,0.14); --line-strong: rgba(236,228,212,0.28);
+      --soil: #d3a563; --soil-deep: #a97b3f; --soil-tint: rgba(211,165,99,0.12);
+      --water: #7fb0da; --water-tint: rgba(127,176,218,0.18);
+      --ok: #59b587; --ok-tint: rgba(89,181,135,0.16);
+      --warn: #d9a441; --warn-tint: rgba(217,164,65,0.16);
+      --danger: #e2685a; --danger-tint: rgba(226,104,90,0.16);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic Medium", "Yu Gothic",
+                 Meiryo, "Noto Sans JP", sans-serif;
+    font-size: 14px; line-height: 1.55;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas,
+                        monospace; font-variant-numeric: tabular-nums; }
+  ::selection { background: var(--soil-tint); }
+  *:focus-visible { outline: 2px solid var(--water); outline-offset: 1px; }
+
+  /* ---------- header ---------- */
+  header {
+    flex: none; display: flex; align-items: baseline; gap: 14px;
+    padding: 12px 20px; border-bottom: 1px solid var(--line-strong);
+    background: linear-gradient(var(--panel), var(--panel));
+  }
+  header .brand { display: flex; align-items: baseline; gap: 9px; }
+  header .mark {
+    width: 9px; height: 9px; border-radius: 1px; background: var(--soil);
+    transform: rotate(45deg); flex: none;
+  }
+  header h1 {
+    font-size: 1.02rem; margin: 0; font-weight: 700; letter-spacing: 0.01em;
+  }
+  header .sub { font-size: 0.76rem; color: var(--ink-dim); letter-spacing: 0.02em; }
+  header .spacer { flex: 1; }
+  .toolbar { display: flex; gap: 8px; align-items: center; }
+  button {
+    font: inherit; border: 1px solid var(--line-strong); border-radius: var(--radius);
+    background: var(--panel); color: var(--ink); padding: 6px 13px; cursor: pointer;
+    font-size: 0.82rem; transition: background 0.12s, border-color 0.12s;
+  }
+  button:hover { background: var(--panel-2); }
+  button:active { transform: translateY(1px); }
+  button.primary {
+    background: var(--soil); border-color: var(--soil); color: #fff9ec; font-weight: 700;
+  }
+  button.primary:hover { background: var(--soil-deep); border-color: var(--soil-deep); }
+  button.primary:disabled { opacity: 0.5; cursor: progress; }
+  button.ghost { background: transparent; }
+  .chk { display: flex; align-items: center; gap: 5px; font-size: 0.8rem; color: var(--ink-dim); }
+  .chk input { accent-color: var(--soil); }
+
+  /* ---------- layout ---------- */
+  main { flex: 1; display: flex; min-height: 0; }
+  #left {
+    width: 44%; min-width: 340px; max-width: 640px;
+    display: flex; flex-direction: column; border-right: 1px solid var(--line-strong);
+    min-height: 0; background: var(--bg);
+  }
+  #right { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow-y: auto; }
+
+  .tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line-strong); }
+  .tabs button {
+    border: 1px solid transparent; border-bottom: none; border-radius: var(--radius) var(--radius) 0 0;
+    background: transparent; padding: 7px 16px; font-size: 0.82rem; color: var(--ink-dim);
+  }
+  .tabs button.active { background: var(--panel); border-color: var(--line-strong);
+                        color: var(--ink); font-weight: 700; }
+
+  #sheet { flex: 1; overflow-y: auto; padding: 14px 16px 40px; display: none; }
+  #sheet.active { display: block; }
+  #jsonPane { flex: 1; display: none; flex-direction: column; min-height: 0; }
+  #jsonPane.active { display: flex; }
+  #editor {
+    flex: 1; width: 100%; border: none; resize: none; background: var(--panel);
+    color: var(--ink); padding: 14px 16px; line-height: 1.6;
+  }
+  #editor.mono { font-size: 12.3px; }
+  #statusbar {
+    flex: none; padding: 7px 16px; font-size: 0.79rem; min-height: 1.3em;
+    border-top: 1px solid var(--line); background: var(--panel);
+  }
+  #statusbar.err { color: var(--danger); }
+  #statusbar.ok { color: var(--ok-dim, var(--ink-dim)); }
+
+  /* ---------- input sheet components ---------- */
+  details.card {
+    border: 1px solid var(--line-strong); border-radius: var(--radius); margin-bottom: 12px;
+    background: var(--panel); overflow: hidden;
+  }
+  details.card > summary {
+    padding: 9px 14px; font-weight: 700; cursor: pointer; user-select: none;
+    list-style: none; display: flex; align-items: center; gap: 8px;
+    background: var(--panel-2); font-size: 0.86rem; letter-spacing: 0.01em;
+  }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary::before {
+    content: "▸"; color: var(--soil); font-size: 0.72em; transition: transform 0.12s;
+  }
+  details.card[open] > summary::before { transform: rotate(90deg); }
+  .card-body { padding: 12px 14px 14px; }
+
+  .field-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 7px 0; }
+  .field-row label { font-size: 0.8rem; color: var(--ink-dim); display: flex; gap: 5px;
+                      align-items: center; white-space: nowrap; }
+  .field-row label b { color: var(--ink); font-weight: 600; }
+  input[type=text], input[type=number] {
+    font: inherit; border: 1px solid var(--line-strong); border-radius: var(--radius);
+    background: var(--bg); color: var(--ink); padding: 4px 7px;
+  }
+  input[type=number] { width: 84px; font-family: inherit; font-variant-numeric: tabular-nums; }
+  input[type=number].sm { width: 62px; }
+  input[type=text] { min-width: 90px; }
+  select {
+    font: inherit; border: 1px solid var(--line-strong); border-radius: var(--radius);
+    background: var(--bg); color: var(--ink); padding: 4px 6px;
+  }
+  .hint { font-size: 0.76rem; color: var(--ink-dim); margin: 3px 0 8px; }
+
+  .layer-card {
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px;
+    margin: 10px 0; background: var(--soil-tint);
+  }
+  .layer-card h4 {
+    margin: 0 0 6px; font-size: 0.84rem; display: flex; align-items: center;
+    justify-content: space-between; color: var(--soil); font-weight: 700;
+  }
+
+  table.grid-table { border-collapse: collapse; font-size: 0.82rem; margin: 6px 0; }
+  table.grid-table th, table.grid-table td {
+    border: 1px solid var(--line); padding: 3px 6px; text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  table.grid-table th { background: var(--panel-2); font-weight: 600; }
+  table.grid-table input[type=number] {
+    width: 70px; border: none; background: transparent; text-align: center; padding: 2px;
+  }
+  table.grid-table input[type=text] { border: none; background: transparent; width: 110px; }
+
+  .mini-btn {
+    padding: 3px 9px; font-size: 0.76rem; background: var(--panel-2);
+    border: 1px solid var(--line-strong); border-radius: var(--radius); cursor: pointer;
+  }
+  .mini-btn.del { background: var(--danger-tint); border-color: var(--danger); color: var(--danger); }
+  .mini-btn.add { background: var(--ok-tint); border-color: var(--ok); color: var(--ok); }
+
+  /* ---------- right pane: drafting sheet ---------- */
+  .frame-wrap { padding: 16px 18px 8px; }
+  .frame {
+    position: relative; border: 1px solid var(--line-strong); border-radius: var(--radius);
+    background: var(--panel); padding: 10px;
+  }
+  .frame .tick {
+    position: absolute; width: 14px; height: 14px; border-color: var(--soil);
+    opacity: 0.55;
+  }
+  .frame .tick.tl { top: 4px; left: 4px; border-top: 2px solid; border-left: 2px solid; }
+  .frame .tick.tr { top: 4px; right: 4px; border-top: 2px solid; border-right: 2px solid; }
+  .frame .tick.bl { bottom: 4px; left: 4px; border-bottom: 2px solid; border-left: 2px solid; }
+  .frame .tick.br { bottom: 4px; right: 4px; border-bottom: 2px solid; border-right: 2px solid; }
+  .frame svg { width: 100%; height: auto; display: block; }
+  .title-block {
+    display: flex; gap: 18px; flex-wrap: wrap; padding: 7px 12px 3px; margin-top: 4px;
+    border-top: 1px solid var(--line); font-size: 0.75rem; color: var(--ink-dim);
+  }
+  .title-block b { color: var(--ink); font-weight: 700; }
+  .title-block .tb-item { display: flex; gap: 5px; }
+
+  .pillrow { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 18px 4px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px;
+    border-radius: 999px; border: 1px solid var(--line-strong); font-size: 0.8rem;
+    background: var(--panel);
+  }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .pill.ok .dot { background: var(--ok); } .pill.ok { color: var(--ok); border-color: var(--ok); background: var(--ok-tint); }
+  .pill.ng .dot { background: var(--danger); } .pill.ng { color: var(--danger); border-color: var(--danger); background: var(--danger-tint); }
+  .pill.pending .dot { background: var(--ink-dim); }
+  .pill .fs-val { font-family: ui-monospace, monospace; font-weight: 700; }
+
+  .warnbox {
+    margin: 10px 18px 0; padding: 10px 14px; border-radius: var(--radius);
+    background: var(--warn-tint); border: 1px solid var(--warn); font-size: 0.8rem;
+  }
+  .warnbox .wtitle { font-weight: 700; color: var(--warn); margin-bottom: 4px; }
+  .warnbox ul { margin: 2px 0 0; padding-left: 18px; }
+  .warnbox li { margin: 2px 0; }
+
+  .report-area { padding: 6px 18px 30px; }
+  .case-block {
+    border: 1px solid var(--line); border-radius: var(--radius); margin: 14px 0;
+    background: var(--panel); overflow: hidden;
+  }
+  .case-head {
+    display: flex; align-items: center; gap: 12px; padding: 9px 14px;
+    background: var(--panel-2); font-weight: 700; font-size: 0.85rem;
+  }
+  .case-meta {
+    padding: 7px 14px; font-size: 0.78rem; color: var(--ink-dim);
+    border-top: 1px solid var(--line); font-family: ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .empty-note {
+    margin: 30px 18px; padding: 22px; text-align: center; color: var(--ink-dim);
+    border: 1px dashed var(--line-strong); border-radius: var(--radius); font-size: 0.85rem;
+  }
+  .note-strip {
+    margin: 4px 18px 16px; font-size: 0.74rem; color: var(--ink-dim); line-height: 1.6;
+  }
+
+  @media (max-width: 880px) {
+    main { flex-direction: column; }
+    #left { width: auto; max-width: none; border-right: none; border-bottom: 1px solid var(--line-strong);
+            height: 46%; }
+    #right { height: 54%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="mark"></span>
+    <h1>teibo</h1>
+    <span class="sub">堤体すべり安定計算 / ブラウザ内完結</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="toolbar">
+    <label class="chk"><input type="checkbox" id="darkToggle"> ダーク</label>
+    <button class="ghost" id="btnLoad">JSON読込</button>
+    <button class="ghost" id="btnSave">JSON保存</button>
+    <button class="primary" id="btnRun">照査実行</button>
+    <input type="file" id="fileInput" accept=".json" style="display:none">
+  </div>
+</header>
+
+<main>
+  <div id="left">
+    <div class="tabs">
+      <button id="tabSheet" class="active" type="button">入力シート</button>
+      <button id="tabJson" type="button">JSON</button>
+    </div>
+    <div id="sheet" class="active"></div>
+    <div id="jsonPane">
+      <textarea id="editor" class="mono" spellcheck="false"></textarea>
+    </div>
+    <div id="statusbar"></div>
+  </div>
+
+  <div id="right">
+    <div class="frame-wrap">
+      <div class="frame">
+        <span class="tick tl"></span><span class="tick tr"></span>
+        <span class="tick bl"></span><span class="tick br"></span>
+        <div id="previewHost"></div>
+        <div class="title-block" id="titleBlock"></div>
+      </div>
+    </div>
+    <div class="pillrow" id="pillrow"></div>
+    <div id="warnHost"></div>
+    <div class="report-area" id="reportArea">
+      <div class="empty-note">「照査実行」を押すと、臨界すべり円の探索結果がここに表示されます。</div>
+    </div>
+    <div class="note-strip">
+      対応: 円弧すべり（修正フェレニウス法/簡易ビショップ法）・上載荷重・外水位・浸潤線自動推定（カサグランデ）・
+      テンションクラック・探索拘束・液状化(FL法)・入力診断。<br>
+      対策工の比較・感度分析・ニューマーク法（滑動変位量）は現時点では未対応です（teibo CLI/Python版で利用可能）。
+      入出力はteibo CLIと同じJSON形式のため、このシートで作った入力はそのまま
+      <code>python -m teibo analyze</code> に渡せます。
+    </div>
+  </div>
+</main>
+
+<script>
+'use strict';
+/* =========================================================================
+   定数・ユーティリティ
+   ========================================================================= */
+const GAMMA_W = 9.81;
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function fmt(n, d) { return (n == null || !isFinite(n)) ? '—' : n.toFixed(d == null ? 3 : d); }
+
+/* =========================================================================
+   幾何
+   ========================================================================= */
+function interpPolyline(points, x) {
+  if (x < points[0][0] || x > points[points.length - 1][0]) return null;
+  for (let i = 0; i < points.length - 1; i++) {
+    const ax = points[i][0], ay = points[i][1], bx = points[i + 1][0], by = points[i + 1][1];
+    if (ax <= x && x <= bx) {
+      if (bx === ax) return Math.max(ay, by);
+      const t = (x - ax) / (bx - ax);
+      return ay + t * (by - ay);
+    }
+  }
+  return points[points.length - 1][1];
+}
+function surfaceY(section, x) { return interpPolyline(section.layers[0].top, x); }
+function phreaticY(pts, x) { return pts ? interpPolyline(pts, x) : null; }
+function externalWaterY(section, x) { return section.external_water ? interpPolyline(section.external_water, x) : null; }
+function layerTopY(layer, x) { return interpPolyline(layer.top, x); }
+
+function arcLowerY(xc, yc, r, x) {
+  const dx = x - xc;
+  if (Math.abs(dx) > r) return null;
+  return yc - Math.sqrt(r * r - dx * dx);
+}
+
+function findArcSurfaceIntersections(section, xc, yc, r, samples) {
+  samples = samples || 220;
+  const xLeftLim = xc - r, xRightLim = xc + r;
+  const surf = section.layers[0].top;
+  const x0 = Math.max(xLeftLim, surf[0][0]), x1 = Math.min(xRightLim, surf[surf.length - 1][0]);
+  if (x1 <= x0) return null;
+  function gap(x) {
+    const ys = surfaceY(section, x), ya = arcLowerY(xc, yc, r, x);
+    if (ys == null || ya == null) return null;
+    return ys - ya;
+  }
+  const xs = new Array(samples + 1);
+  for (let i = 0; i <= samples; i++) xs[i] = x0 + (x1 - x0) * i / samples;
+  const signs = xs.map(gap);
+  const crossings = [];
+  for (let i = 0; i < samples; i++) {
+    const g0 = signs[i], g1 = signs[i + 1];
+    if (g0 == null || g1 == null) continue;
+    if (g0 === 0) crossings.push(xs[i]);
+    if ((g0 < 0 && g1 > 0) || (g0 > 0 && g1 < 0)) {
+      let lo = xs[i], hi = xs[i + 1], glo = g0;
+      for (let k = 0; k < 42; k++) {
+        const mid = 0.5 * (lo + hi), gm = gap(mid);
+        if (gm == null) break;
+        if ((glo < 0 && gm < 0) || (glo > 0 && gm > 0)) { lo = mid; glo = gm; } else { hi = mid; }
+      }
+      crossings.push(0.5 * (lo + hi));
+    }
+  }
+  if (crossings.length < 2) return null;
+  const xl = crossings[0], xr = crossings[crossings.length - 1];
+  if (xr - xl < 1e-6) return null;
+  const gm = gap(0.5 * (xl + xr));
+  if (gm == null || gm <= 0) return null;
+  return [xl, xr];
+}
+
+function columnWeight(section, x, yBottom, yTop) {
+  if (yTop <= yBottom) return 0;
+  const yw = phreaticY(section.phreatic, x);
+  const tops = [];
+  for (const layer of section.layers) {
+    const yt = layerTopY(layer, x);
+    if (yt != null) tops.push([yt, layer]);
+  }
+  if (!tops.length) return 0;
+  let total = 0;
+  const n = tops.length;
+  for (let i = 0; i < n; i++) {
+    const yt = tops[i][0], layer = tops[i][1];
+    const yb = i + 1 < n ? tops[i + 1][0] : -Infinity;
+    const segTop = Math.min(yTop, yt), segBot = Math.max(yBottom, yb);
+    if (segTop <= segBot) continue;
+    if (yw == null) {
+      total += layer.gamma * (segTop - segBot);
+    } else {
+      const wetTop = segTop, wetBot = Math.max(segBot, yw);
+      if (wetTop > wetBot) total += layer.gamma * (wetTop - wetBot);
+      const satTop = Math.min(segTop, yw), satBot = segBot;
+      if (satTop > satBot) total += layer.gamma_sat * (satTop - satBot);
+    }
+  }
+  return total;
+}
+
+function soilAt(section, x, y) {
+  const tops = [];
+  for (const layer of section.layers) {
+    const yt = layerTopY(layer, x);
+    if (yt != null) tops.push([yt, layer]);
+  }
+  if (!tops.length) return null;
+  const n = tops.length;
+  for (let i = 0; i < n; i++) {
+    const yt = tops[i][0], layer = tops[i][1];
+    const yb = i + 1 < n ? tops[i + 1][0] : -Infinity;
+    if (yb <= y && y <= yt) return layer;
+  }
+  if (y > tops[0][0]) return tops[0][1];
+  return tops[n - 1][1];
+}
+
+function porePressure(section, x, ySlip) {
+  const heads = [];
+  const yw = phreaticY(section.phreatic, x); if (yw != null) heads.push(yw);
+  const ye = externalWaterY(section, x); if (ye != null) heads.push(ye);
+  if (!heads.length) return 0;
+  const head = Math.max.apply(null, heads) - ySlip;
+  return head > 0 ? GAMMA_W * head : 0;
+}
+
+function waterOverburden(section, x) {
+  const yw = externalWaterY(section, x);
+  if (yw == null) return 0;
+  const ys = surfaceY(section, x);
+  if (ys == null) return 0;
+  const depth = yw - ys;
+  return depth > 0 ? GAMMA_W * depth : 0;
+}
+
+/* =========================================================================
+   液状化 (FL法)
+   ========================================================================= */
+function finesCorrection(fc) {
+  let c1;
+  if (fc < 10) c1 = 1.0; else if (fc < 60) c1 = (fc + 40) / 50; else c1 = fc / 20 - 1;
+  const c2 = fc < 10 ? 0 : (fc - 10) / 18;
+  return [c1, c2];
+}
+function flValue(nValue, finesContent, sigmaV, sigmaVEff, kh, depth) {
+  if (kh <= 0 || sigmaVEff <= 0 || sigmaV <= 0) return null;
+  const n1 = 170 * nValue / (sigmaVEff + 70);
+  const [c1, c2] = finesCorrection(finesContent);
+  const na = c1 * n1 + c2;
+  let rl = 0.0882 * Math.sqrt(Math.max(na, 0) / 1.7);
+  if (na >= 14) rl += 1.6e-6 * Math.pow(na - 14, 4.5);
+  const rd = Math.max(1 - 0.015 * depth, 0);
+  const load = rd * kh * sigmaV / sigmaVEff;
+  if (load <= 0) return null;
+  return rl / load;
+}
+function ruFromFl(fl) {
+  if (fl == null) return 0;
+  if (fl <= 1) return 1;
+  return Math.min(1, Math.pow(fl, -7));
+}
+
+/* =========================================================================
+   安定計算（スライス法）
+   ========================================================================= */
+function applyTensionCrack(section, xc, yc, r, xl, xr) {
+  const crack = section.tension_crack;
+  function cover(x) {
+    const ys = surfaceY(section, x), ya = arcLowerY(xc, yc, r, x);
+    if (ys == null || ya == null) return null;
+    return ys - ya;
+  }
+  const ysL = surfaceY(section, xl), ysR = surfaceY(section, xr);
+  if (ysL == null || ysR == null) return [xl, xr, null, 0];
+  const upperIsLeft = ysL >= ysR;
+  const nScan = 70, zc = crack.depth;
+  const xFrom = upperIsLeft ? xl : xr, xTo = upperIsLeft ? xr : xl;
+  let xCrack = null, prevX = xFrom;
+  for (let i = 1; i <= nScan; i++) {
+    const x = xFrom + (xTo - xFrom) * i / nScan;
+    const cv = cover(x);
+    if (cv == null) { prevX = x; continue; }
+    if (cv >= zc) {
+      let lo = prevX, hi = x;
+      for (let k = 0; k < 42; k++) {
+        const mid = 0.5 * (lo + hi), cm = cover(mid);
+        if (cm == null || cm < zc) lo = mid; else hi = mid;
+      }
+      xCrack = 0.5 * (lo + hi);
+      break;
+    }
+    prevX = x;
+  }
+  if (xCrack == null) return null;
+  const yaCrack = arcLowerY(xc, yc, r, xCrack);
+  if (yaCrack == null) return null;
+  const zw = crack.water_depth || 0;
+  let extra = 0;
+  if (zw > 0) {
+    const pw = 0.5 * GAMMA_W * zw * zw;
+    const arm = yc - (yaCrack + zw / 3);
+    if (arm > 0) extra = pw * arm / r;
+  }
+  return upperIsLeft ? [xCrack, xr, xCrack, extra] : [xl, xCrack, xCrack, extra];
+}
+
+function buildSlices(section, xc, yc, r, n, caseObj) {
+  const inter = findArcSurfaceIntersections(section, xc, yc, r);
+  if (!inter) return null;
+  let [xl, xr] = inter;
+  let crackX = null, extraDriving = 0;
+  if (section.tension_crack) {
+    const cracked = applyTensionCrack(section, xc, yc, r, xl, xr);
+    if (!cracked) return null;
+    [xl, xr, crackX, extraDriving] = cracked;
+  }
+  const width = (xr - xl) / n;
+  if (width <= 0) return null;
+  const slices = [];
+  for (let i = 0; i < n; i++) {
+    const xm = xl + width * (i + 0.5);
+    const ys = surfaceY(section, xm), ya = arcLowerY(xc, yc, r, xm);
+    if (ys == null || ya == null) continue;
+    const h = ys - ya;
+    if (h <= 0) continue;
+    let w = columnWeight(section, xm, ya, ys) * width;
+    const x0 = xm - width / 2, x1 = xm + width / 2;
+    for (const sc of (section.surcharges || [])) {
+      const ov = Math.min(x1, sc.x_end) - Math.max(x0, sc.x_start);
+      if (ov > 0) w += sc.q * ov;
+    }
+    w += waterOverburden(section, xm) * width;
+    const dx = xm - xc;
+    const sinA = clamp(dx / r, -0.999, 0.999);
+    let alpha = Math.asin(sinA);
+    const cosA = Math.cos(alpha);
+    const baseLen = cosA > 1e-9 ? width / cosA : width;
+    let u = porePressure(section, xm, ya);
+    const layer = soilAt(section, xm, ya);
+    const c = layer ? layer.c : 0, phi = layer ? layer.phi * Math.PI / 180 : 0;
+    let fl = null;
+    if (caseObj && caseObj.consider_liquefaction && layer && layer.liquefaction && u > 0) {
+      const sigmaV = columnWeight(section, xm, ya, ys) + waterOverburden(section, xm);
+      const sigmaVEff = Math.max(sigmaV - u, 1e-6);
+      fl = flValue(layer.liquefaction.n_value, layer.liquefaction.fines_content || 0,
+                    sigmaV, sigmaVEff, caseObj.kh, h);
+      const ru = ruFromFl(fl);
+      if (ru > 0) u = Math.min(u + ru * sigmaVEff, sigmaV);
+    }
+    slices.push({ xMid: xm, width, height: h, weight: w, alpha, baseLen, u, c, phi, fl });
+  }
+  if (!slices.length) return null;
+  const sumDrive = slices.reduce((s, sl) => s + sl.weight * Math.sin(sl.alpha), 0);
+  if (sumDrive < 0) for (const sl of slices) sl.alpha = -sl.alpha;
+  return { slices, crackX, extraDriving };
+}
+
+function felleniusFs(slices, kh, extraDriving) {
+  let numer = 0, denom = extraDriving || 0;
+  for (const s of slices) {
+    const sinA = Math.sin(s.alpha), cosA = Math.cos(s.alpha);
+    const nEff = s.weight * cosA - kh * s.weight * sinA - s.u * s.baseLen;
+    numer += s.c * s.baseLen + Math.max(nEff, 0) * Math.tan(s.phi);
+    denom += s.weight * sinA + kh * s.weight * cosA;
+  }
+  if (denom <= 1e-9) return null;
+  return numer / denom;
+}
+
+function bishopFs(slices, kh, extraDriving) {
+  let denom = extraDriving || 0;
+  for (const s of slices) denom += s.weight * Math.sin(s.alpha) + kh * s.weight * Math.cos(s.alpha);
+  if (denom <= 1e-9) return null;
+  let fs = 1.0;
+  for (let it = 0; it < 100; it++) {
+    let numer = 0;
+    for (const s of slices) {
+      const tanPhi = Math.tan(s.phi);
+      const mAlpha = Math.cos(s.alpha) * (1 + Math.tan(s.alpha) * tanPhi / fs);
+      if (Math.abs(mAlpha) < 1e-6) return null;
+      numer += (s.c * s.width + (s.weight - s.u * s.width) * tanPhi) / mAlpha;
+    }
+    const newFs = numer / denom;
+    if (newFs <= 0) return null;
+    if (Math.abs(newFs - fs) < 1e-4) return newFs;
+    fs = newFs;
+  }
+  return fs;
+}
+
+function analyzeCircle(section, caseObj, xc, yc, r, n) {
+  const surf = buildSlices(section, xc, yc, r, n, caseObj);
+  if (!surf) return null;
+  const fs = caseObj.method === 'bishop'
+    ? bishopFs(surf.slices, caseObj.kh, surf.extraDriving)
+    : felleniusFs(surf.slices, caseObj.kh, surf.extraDriving);
+  if (fs == null || !isFinite(fs)) return null;
+  return { xc, yc, r, fs, slices: surf.slices, crackX: surf.crackX, extraDriving: surf.extraDriving };
+}
+
+/* =========================================================================
+   臨界円探索
+   ========================================================================= */
+function linspace(a, b, n) {
+  if (n <= 1) return [a];
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) out[i] = a + (b - a) * i / (n - 1);
+  return out;
+}
+
+function autoGrid(section, grid) {
+  const surf = section.layers[0].top;
+  const xs = surf.map(p => p[0]), ys = surf.map(p => p[1]);
+  const xmin = Math.min.apply(null, xs), xmax = Math.max.apply(null, xs);
+  const ymin = Math.min.apply(null, ys), ymax = Math.max.apply(null, ys);
+  const height = ymax - ymin, width = xmax - xmin;
+  const g = Object.assign({}, grid);
+  if (g.xc_min == null) g.xc_min = xmin + width * 0.15;
+  if (g.xc_max == null) g.xc_max = xmax - width * 0.05;
+  if (g.yc_min == null) g.yc_min = ymax + height * 0.2;
+  if (g.yc_max == null) g.yc_max = ymax + Math.max(height * 2.0, 5.0);
+  if (g.tangent_y_min == null) g.tangent_y_min = ymin - Math.max(height * 1.0, 3.0);
+  if (g.tangent_y_max == null) g.tangent_y_max = ymin + height * 0.5;
+  if (g.y_lower_limit != null && g.tangent_y_min < g.y_lower_limit) g.tangent_y_min = g.y_lower_limit;
+  g.nx = g.nx || 12; g.ny = g.ny || 12; g.nr = g.nr || 10; g.n_slices = g.n_slices || 30;
+  return g;
+}
+
+function passesConstraints(g, res) {
+  if (!res.slices.length) return false;
+  const xl = res.slices[0].xMid - res.slices[0].width / 2;
+  const xr = res.slices[res.slices.length - 1].xMid + res.slices[res.slices.length - 1].width / 2;
+  if (g.x_entry_min != null && xl < g.x_entry_min) return false;
+  if (g.x_entry_max != null && xl > g.x_entry_max) return false;
+  if (g.x_exit_min != null && xr < g.x_exit_min) return false;
+  if (g.x_exit_max != null && xr > g.x_exit_max) return false;
+  return true;
+}
+
+function refine(section, caseObj, seed, g, passes) {
+  let best = seed;
+  let dx = (g.xc_max - g.xc_min) / Math.max(g.nx - 1, 1);
+  let dy = (g.yc_max - g.yc_min) / Math.max(g.ny - 1, 1);
+  let dt = (g.tangent_y_max - g.tangent_y_min) / Math.max(g.nr - 1, 1);
+  for (let p = 0; p < passes; p++) {
+    dx *= 0.5; dy *= 0.5; dt *= 0.5;
+    const xs = linspace(best.xc - dx, best.xc + dx, 5);
+    const ys = linspace(best.yc - dy, best.yc + dy, 5);
+    const ty0 = best.yc - best.r;
+    const tys = linspace(ty0 - dt, ty0 + dt, 5);
+    for (const xc of xs) for (const yc of ys) for (const ty of tys) {
+      const r = yc - ty;
+      if (r <= 0.1) continue;
+      if (g.y_lower_limit != null && yc - r < g.y_lower_limit - 1e-9) continue;
+      const res = analyzeCircle(section, caseObj, xc, yc, r, g.n_slices);
+      if (res && res.fs < best.fs && passesConstraints(g, res)) best = res;
+    }
+  }
+  return best;
+}
+
+function searchCritical(section, caseObj, grid) {
+  const g = autoGrid(section, grid);
+  let best = null, count = 0;
+  const xs = linspace(g.xc_min, g.xc_max, g.nx);
+  const ys = linspace(g.yc_min, g.yc_max, g.ny);
+  const tangents = linspace(g.tangent_y_min, g.tangent_y_max, g.nr);
+  for (const xc of xs) for (const yc of ys) for (const ty of tangents) {
+    const r = yc - ty;
+    if (r <= 0.1) continue;
+    if (g.y_lower_limit != null && yc - r < g.y_lower_limit - 1e-9) continue;
+    const res = analyzeCircle(section, caseObj, xc, yc, r, g.n_slices);
+    if (!res || !passesConstraints(g, res)) continue;
+    count++;
+    if (!best || res.fs < best.fs) best = res;
+  }
+  if (best) best = refine(section, caseObj, best, g, 2);
+  return { case: caseObj, critical: best, evaluated: count };
+}
+
+function sectionForCase(section, caseObj) {
+  const changes = {};
+  if (caseObj.phreatic != null) { changes.phreatic = caseObj.phreatic; changes.phreatic_estimated = false; }
+  if (caseObj.external_water !== undefined) {
+    changes.external_water = (caseObj.external_water && caseObj.external_water.length)
+      ? caseObj.external_water : null;
+  }
+  if (!Object.keys(changes).length) return section;
+  return Object.assign({}, section, changes);
+}
+
+function runAll(section, cases, grid) {
+  return cases.map(c => searchCritical(sectionForCase(section, c), c, grid));
+}
+
+/* =========================================================================
+   浸潤線の自動推定（カサグランデの基本放物線）
+   ========================================================================= */
+function findCrossing(pts, level, xFrom, xTo) {
+  const lo = Math.min(xFrom, xTo), hi = Math.max(xFrom, xTo);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const ax = pts[i][0], ay = pts[i][1], bx = pts[i + 1][0], by = pts[i + 1][1];
+    if (bx < lo || ax > hi) continue;
+    const ya = ay - level, yb = by - level;
+    if (ya === 0 && ax >= lo && ax <= hi) return ax;
+    if (ya * yb < 0) {
+      const t = ya / (ya - yb), x = ax + t * (bx - ax);
+      if (x >= lo && x <= hi) return x;
+    }
+  }
+  return null;
+}
+function mirrorPts(pts) { return pts.slice().reverse().map(p => [-p[0], p[1]]); }
+
+function estimateLeft(surface, waterLevel, tailLevel, nPoints) {
+  const xLeft = surface[0][0], xRight = surface[surface.length - 1][0];
+  const yBase = surface[surface.length - 1][1];
+  if (tailLevel == null) tailLevel = yBase;
+  const h = waterLevel - yBase;
+  if (h <= 0) throw new Error(`外水位 (${waterLevel}) が川裏地盤高 (${yBase}) 以下です`);
+  const xA = findCrossing(surface, waterLevel, xLeft, xRight);
+  if (xA == null) throw new Error(`外水位 (${waterLevel}) と川表法面の交点が見つかりません`);
+  let xToeW = xLeft;
+  for (const p of surface) { if (p[0] >= xA) break; if (p[1] <= yBase + 1e-6) xToeW = p[0]; }
+  const delta = Math.max(xA - xToeW, 0);
+  const xA0 = xA - 0.3 * delta;
+  let xF = findCrossing(surface, yBase + 1e-9, xA, xRight);
+  if (xF == null || xF <= xA) xF = xRight;
+  const d = xF - xA0;
+  if (d <= 0) throw new Error('断面形状から放物線を定義できません');
+  const y0 = Math.sqrt(d * d + h * h) - d;
+  function parabolaY(x) { const xi = xF - x; if (xi <= 0) return yBase + y0; return yBase + Math.sqrt(y0 * y0 + 2 * y0 * xi); }
+  const pts = [];
+  function add(x, y, clampSurface) {
+    if (clampSurface !== false) { const ys = interpPolyline(surface, x); if (ys != null) y = Math.min(y, ys); }
+    y = Math.min(y, waterLevel);
+    y = Math.max(y, Math.min(tailLevel, yBase));
+    if (pts.length && x <= pts[pts.length - 1][0]) return;
+    pts.push([x, y]);
+  }
+  add(xLeft, waterLevel, false);
+  add(xA, waterLevel, false);
+  for (let i = 1; i <= nPoints; i++) { const x = xA + (xF - xA) * i / nPoints; add(x, parabolaY(x)); }
+  add(xRight, tailLevel, false);
+  if (pts.length < 2) throw new Error('有効な浸潤線を生成できませんでした');
+  return pts;
+}
+
+function estimatePhreatic(section, waterLevel, waterside, tailLevel, nPoints) {
+  nPoints = nPoints || 20;
+  const surface = section.layers[0].top;
+  if (waterside === 'right') {
+    return mirrorPts(estimateLeft(mirrorPts(surface), waterLevel, tailLevel, nPoints));
+  }
+  return estimateLeft(surface, waterLevel, tailLevel, nPoints);
+}
+
+/* =========================================================================
+   断面の正規化（デフォルト補完・浸潤線自動推定の適用）
+   ========================================================================= */
+function resolveSection(rawSection) {
+  const sec = JSON.parse(JSON.stringify(rawSection || { layers: [] }));
+  sec.layers = (sec.layers || []).map(ly => ({
+    name: ly.name || '土層',
+    top: ly.top || [[0, 0], [10, 0]],
+    gamma: numOr(ly.gamma, 18),
+    gamma_sat: numOr(ly.gamma_sat, numOr(ly.gamma, 18)),
+    c: numOr(ly.c, 0),
+    phi: numOr(ly.phi, 0),
+    liquefaction: ly.liquefaction ? {
+      n_value: numOr(ly.liquefaction.n_value, 10),
+      fines_content: numOr(ly.liquefaction.fines_content, 0),
+    } : null,
+  }));
+  sec.phreatic_estimated = false;
+  if (!sec.phreatic && sec.seepage) {
+    sec.phreatic = estimatePhreatic(
+      sec, numOr(sec.seepage.water_level, 0), sec.seepage.waterside || 'left',
+      sec.seepage.tail_level != null ? numOr(sec.seepage.tail_level, 0) : null,
+      sec.seepage.n_points
+    );
+    sec.phreatic_estimated = true;
+  }
+  return sec;
+}
+function numOr(v, d) { return (v === null || v === undefined || v === '') ? d : Number(v); }
+
+/* =========================================================================
+   入力診断
+   ========================================================================= */
+function sampleRange(x0, x1, n) {
+  n = n || 140;
+  if (x1 <= x0) return [x0];
+  const out = new Array(n + 1);
+  for (let i = 0; i <= n; i++) out[i] = x0 + (x1 - x0) * i / n;
+  return out;
+}
+function rangesWhere(xs, flags) {
+  const out = []; let start = null;
+  for (let i = 0; i < xs.length; i++) {
+    if (flags[i] && start == null) start = xs[i];
+    else if (!flags[i] && start != null) { out.push([start, xs[i]]); start = null; }
+  }
+  if (start != null) out.push([start, xs[xs.length - 1]]);
+  return out;
+}
+function fmtRanges(ranges) {
+  return ranges.slice(0, 3).map(([a, b]) => `x=${a.toFixed(1)}〜${b.toFixed(1)}`).join('、') +
+    (ranges.length > 3 ? ' ほか' : '');
+}
+function checkPhreaticAboveSurface(section, phreatic, label) {
+  if (!phreatic) return [];
+  const surf = section.layers[0].top;
+  const x0 = Math.max(surf[0][0], phreatic[0][0]);
+  const x1 = Math.min(surf[surf.length - 1][0], phreatic[phreatic.length - 1][0]);
+  const xs = sampleRange(x0, x1);
+  const flags = xs.map(x => {
+    const ys = surfaceY(section, x), yp = interpPolyline(phreatic, x);
+    let bad = ys != null && yp != null && yp > ys + 0.05;
+    if (bad) { const ye = externalWaterY(section, x); if (ye != null && ye >= yp - 0.05) bad = false; }
+    return bad;
+  });
+  const ranges = rangesWhere(xs, flags);
+  if (!ranges.length) return [];
+  return [`${label}が地表面より上にあります（${fmtRanges(ranges)}）。地表水（池状態）として扱われ有効応力がほぼ0になり、安全率が異常に小さくなるおそれがあります。外水として扱う場合は「外水位」を使用してください。`];
+}
+function validateInput(section, cases) {
+  let warnings = [];
+  warnings = warnings.concat(checkPhreaticAboveSurface(section, section.phreatic, '浸潤線'));
+  for (const c of cases) {
+    if (c.phreatic) warnings = warnings.concat(checkPhreaticAboveSurface(section, c.phreatic, `ケース「${c.name}」の浸潤線`));
+  }
+  for (let i = 0; i < section.layers.length - 1; i++) {
+    const upper = section.layers[i], lower = section.layers[i + 1];
+    const x0 = Math.max(upper.top[0][0], lower.top[0][0]);
+    const x1 = Math.min(upper.top[upper.top.length - 1][0], lower.top[lower.top.length - 1][0]);
+    const xs = sampleRange(x0, x1);
+    const flags = xs.map(x => {
+      const yu = interpPolyline(upper.top, x), yl = interpPolyline(lower.top, x);
+      return yu != null && yl != null && yl > yu + 0.05;
+    });
+    const ranges = rangesWhere(xs, flags);
+    if (ranges.length) warnings.push(`層「${lower.name}」の上面が層「${upper.name}」の上面より高い区間があります（${fmtRanges(ranges)}）。layers は上から順に並べてください。`);
+  }
+  for (const ly of section.layers) {
+    if (ly.gamma_sat < ly.gamma) warnings.push(`層「${ly.name}」: γsat (${ly.gamma_sat}) < γt (${ly.gamma}) となっています。`);
+    if (ly.c === 0 && ly.phi === 0) warnings.push(`層「${ly.name}」: c=0 かつ φ=0（せん断強度なし）です。`);
+  }
+  const surf = section.layers[0].top;
+  for (const sc of (section.surcharges || [])) {
+    if (sc.x_end < surf[0][0] || sc.x_start > surf[surf.length - 1][0])
+      warnings.push(`載荷重「${sc.name}」が地表面の定義範囲外にあり、計算に反映されません。`);
+  }
+  const hasLiq = section.layers.some(l => l.liquefaction);
+  if (hasLiq && !cases.some(c => c.consider_liquefaction))
+    warnings.push('液状化特性（liquefaction）が定義されていますが、考慮するケースがありません。');
+  return warnings;
+}
+
+/* =========================================================================
+   描画（SVG）
+   ========================================================================= */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function polyPts(points, sx, sy) {
+  return points.map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' ');
+}
+
+function makeTransform(section, results) {
+  const xs = [], ys = [];
+  for (const ly of section.layers) for (const p of ly.top) { xs.push(p[0]); ys.push(p[1]); }
+  if (section.phreatic) for (const p of section.phreatic) { xs.push(p[0]); ys.push(p[1]); }
+  if (section.external_water) for (const p of section.external_water) { xs.push(p[0]); ys.push(p[1]); }
+  let xmin = Math.min.apply(null, xs), xmax = Math.max.apply(null, xs);
+  let ymin = Math.min.apply(null, ys), ymax = Math.max.apply(null, ys);
+  ymin -= (ymax - ymin) * 0.6 + 2.0;
+  for (const r of (results || [])) if (r && r.critical) ymax = Math.max(ymax, r.critical.yc + 0.5);
+  const pad = 42, w = 720;
+  const spanX = xmax > xmin ? xmax - xmin : 1, spanY = ymax > ymin ? ymax - ymin : 1;
+  const scale = (w - 2 * pad) / spanX;
+  const h = Math.round(spanY * scale + 2 * pad);
+  const sx = x => pad + (x - xmin) * scale;
+  const sy = y => h - pad - (y - ymin) * scale;
+  return { sx, sy, w, h, scale };
+}
+
+function buildCaseSvg(section, result, sx, sy, w, h) {
+  const svg = svgEl('svg', { viewBox: `0 0 ${w} ${h}`, width: '100%', preserveAspectRatio: 'xMidYMid meet' });
+
+  // 背景の淡いグリッド（標高の目安線）
+  const gridG = svgEl('g', {});
+  const surf = section.layers[0].top;
+  const ys0 = surf.map(p => p[1]);
+  const gy0 = Math.floor(Math.min.apply(null, ys0) - 2), gy1 = Math.ceil(Math.max.apply(null, ys0) + 6);
+  for (let gy = gy0; gy <= gy1; gy += 2) {
+    gridG.appendChild(svgEl('line', {
+      x1: 0, x2: w, y1: sy(gy).toFixed(1), y2: sy(gy).toFixed(1),
+      stroke: 'currentColor', 'stroke-opacity': 0.05, 'stroke-width': 1
+    }));
+  }
+  svg.appendChild(gridG);
+
+  // 地盤ポリゴン
+  const groundPts = `${polyPts(surf, sx, sy)} ${sx(surf[surf.length - 1][0]).toFixed(1)},${(h - 30).toFixed(1)} ${sx(surf[0][0]).toFixed(1)},${(h - 30).toFixed(1)}`;
+  svg.appendChild(svgEl('polygon', { points: groundPts, fill: 'var(--soil-tint)', stroke: 'none' }));
+  svg.appendChild(svgEl('polygon', { points: groundPts, fill: '#00000000' }));
+
+  const layerColors = ['color-mix(in srgb, var(--soil) 55%, transparent)',
+                        'color-mix(in srgb, var(--soil-deep) 65%, transparent)',
+                        'color-mix(in srgb, var(--water) 55%, transparent)'];
+  section.layers.forEach((ly, i) => {
+    svg.appendChild(svgEl('polyline', {
+      points: polyPts(ly.top, sx, sy), fill: 'none',
+      stroke: layerColors[i % layerColors.length], 'stroke-width': 1.4
+    }));
+  });
+  svg.appendChild(svgEl('polyline', {
+    points: polyPts(surf, sx, sy), fill: 'none', stroke: 'var(--soil-deep)', 'stroke-width': 2.4
+  }));
+
+  // 地盤改良の代わりはなし（対策工未対応）
+
+  // 外水
+  if (section.external_water) {
+    const ew = section.external_water;
+    const x0w = ew[0][0], x1w = ew[ew.length - 1][0];
+    const nsm = 100;
+    let region = []; const regions = [];
+    for (let k = 0; k <= nsm; k++) {
+      const xx = x0w + (x1w - x0w) * k / nsm;
+      const yw_ = externalWaterY(section, xx), ys_ = surfaceY(section, xx);
+      if (yw_ != null && ys_ != null && yw_ > ys_ + 1e-6) region.push([xx, yw_, ys_]);
+      else if (region.length) { regions.push(region); region = []; }
+    }
+    if (region.length) regions.push(region);
+    for (const reg of regions) {
+      const top = reg.map(([x, yw_]) => `${sx(x).toFixed(1)},${sy(yw_).toFixed(1)}`).join(' ');
+      const bot = reg.slice().reverse().map(([x, , ys_]) => `${sx(x).toFixed(1)},${sy(ys_).toFixed(1)}`).join(' ');
+      svg.appendChild(svgEl('polygon', { points: `${top} ${bot}`, fill: 'var(--water)', opacity: 0.22, stroke: 'none' }));
+    }
+    svg.appendChild(svgEl('polyline', { points: polyPts(ew, sx, sy), fill: 'none', stroke: 'var(--water)', 'stroke-width': 2 }));
+    const p0 = ew[0];
+    const t = svgEl('text', { x: sx(p0[0]) + 4, y: sy(p0[1]) - 6, class: 'lbl water' }); t.textContent = '外水位';
+    svg.appendChild(t);
+  }
+
+  // 上載荷重
+  for (const sc of (section.surcharges || [])) {
+    const nArrow = 6, alen = 16;
+    const tail = [];
+    for (let k = 0; k <= nArrow; k++) {
+      const xx = sc.x_start + (sc.x_end - sc.x_start) * k / nArrow;
+      const ysArr = surfaceY(section, xx);
+      if (ysArr == null) continue;
+      const xpx = sx(xx), ypx = sy(ysArr);
+      svg.appendChild(svgEl('line', { x1: xpx, y1: ypx - alen, x2: xpx, y2: ypx - 2, stroke: 'var(--warn)', 'stroke-width': 1.5 }));
+      svg.appendChild(svgEl('polygon', {
+        points: `${xpx - 3},${ypx - 6} ${xpx + 3},${ypx - 6} ${xpx},${ypx - 1}`, fill: 'var(--warn)'
+      }));
+      tail.push([xpx, ypx - alen]);
+    }
+    if (tail.length) {
+      svg.appendChild(svgEl('polyline', { points: tail.map(p => p.join(',')).join(' '), fill: 'none', stroke: 'var(--warn)', 'stroke-width': 1.5 }));
+      const mx = 0.5 * (tail[0][0] + tail[tail.length - 1][0]);
+      const t = svgEl('text', { x: mx, y: tail[0][1] - 5, class: 'lbl warn', 'text-anchor': 'middle' });
+      t.textContent = `q=${sc.q} kN/m²`;
+      svg.appendChild(t);
+    }
+  }
+
+  // 浸潤線
+  if (section.phreatic) {
+    svg.appendChild(svgEl('polyline', {
+      points: polyPts(section.phreatic, sx, sy), fill: 'none',
+      stroke: 'var(--water)', 'stroke-width': 2, 'stroke-dasharray': '6,4'
+    }));
+    const p0 = section.phreatic[0];
+    const t = svgEl('text', { x: sx(p0[0]) + 4, y: sy(p0[1]) - 4, class: 'lbl water' });
+    t.textContent = section.phreatic_estimated ? '浸潤線（推定）' : '浸潤線';
+    svg.appendChild(t);
+  }
+
+  const cr = result && result.critical ? result.critical : null;
+  if (cr) {
+    const cx = sx(cr.xc), cy = sy(cr.yc);
+    if (cr.slices.length) {
+      const xl0 = cr.slices[0].xMid - cr.slices[0].width / 2;
+      const xr0 = cr.slices[cr.slices.length - 1].xMid + cr.slices[cr.slices.length - 1].width / 2;
+      const arcPts = [];
+      const nArc = 56;
+      for (let k = 0; k <= nArc; k++) {
+        const xx = xl0 + (xr0 - xl0) * k / nArc;
+        const dx = xx - cr.xc;
+        if (Math.abs(dx) > cr.r) continue;
+        const yy = cr.yc - Math.sqrt(cr.r * cr.r - dx * dx);
+        arcPts.push(`${sx(xx).toFixed(1)},${sy(yy).toFixed(1)}`);
+      }
+      svg.appendChild(svgEl('polyline', { points: arcPts.join(' '), fill: 'none', stroke: 'var(--danger)', 'stroke-width': 2.4 }));
+      const step = Math.max(1, Math.floor(cr.slices.length / 18));
+      for (let i = 0; i < cr.slices.length; i += step) {
+        const s = cr.slices[i];
+        const dx = s.xMid - cr.xc;
+        if (Math.abs(dx) > cr.r) continue;
+        const ya = cr.yc - Math.sqrt(cr.r * cr.r - dx * dx);
+        const ysf = surfaceY(section, s.xMid);
+        if (ysf == null) continue;
+        svg.appendChild(svgEl('line', {
+          x1: sx(s.xMid), y1: sy(ysf), x2: sx(s.xMid), y2: sy(ya),
+          stroke: 'var(--danger)', 'stroke-width': 0.4, opacity: 0.5
+        }));
+      }
+    }
+    if (cr.crackX != null) {
+      const dxc = cr.crackX - cr.xc;
+      if (Math.abs(dxc) <= cr.r) {
+        const yaC = cr.yc - Math.sqrt(cr.r * cr.r - dxc * dxc);
+        const ysC = surfaceY(section, cr.crackX);
+        if (ysC != null) {
+          svg.appendChild(svgEl('line', {
+            x1: sx(cr.crackX), y1: sy(ysC), x2: sx(cr.crackX), y2: sy(yaC),
+            stroke: 'var(--danger)', 'stroke-width': 2, 'stroke-dasharray': '4,3'
+          }));
+        }
+      }
+    }
+    svg.appendChild(svgEl('circle', { cx, cy, r: 3, fill: 'var(--danger)' }));
+    const okColor = result.critical.fs >= result.case.allowable_fs ? 'var(--ok)' : 'var(--danger)';
+    const judge = result.critical.fs >= result.case.allowable_fs ? 'OK' : 'NG';
+    const t = svgEl('text', { x: cx, y: cy - 9, class: 'lbl fs', fill: okColor, 'text-anchor': 'middle' });
+    t.textContent = `Fs=${cr.fs.toFixed(3)} (${judge})`;
+    svg.appendChild(t);
+  }
+  return svg;
+}
+
+function stampSvgStyle(svg) {
+  const style = svgEl('style', {});
+  style.textContent = `
+    text.lbl { font-size: 11px; font-family: ui-monospace, monospace; }
+    text.lbl.water { fill: var(--water); }
+    text.lbl.warn { fill: var(--warn); }
+    text.lbl.fs { font-size: 13px; font-weight: 700; }
+  `;
+  svg.insertBefore(style, svg.firstChild);
+  svg.style.color = 'var(--soil-deep)';
+  return svg;
+}
+
+/* =========================================================================
+   既定入力
+   ========================================================================= */
+function defaultState() {
+  return {
+    section: {
+      name: '河川堤防 標準断面',
+      layers: [
+        { name: '盛土（堤体）', top: [[-5, 0], [0, 0], [10, 5], [13, 5], [23, 0], [40, 0]],
+          gamma: 18.0, gamma_sat: 19.0, c: 10.0, phi: 25.0 },
+        { name: '基礎地盤', top: [[-5, 0], [40, 0]],
+          gamma: 17.0, gamma_sat: 18.0, c: 15.0, phi: 20.0 },
+      ],
+      phreatic: [[-5, 4], [0, 4], [23, 1], [40, 1]],
+    },
+    cases: [
+      { name: '常時', kh: 0.0, allowable_fs: 1.2, method: 'fellenius' },
+      { name: '地震時', kh: 0.15, allowable_fs: 1.0, method: 'fellenius' },
+    ],
+    grid: { nx: 12, ny: 12, nr: 10, n_slices: 30 },
+  };
+}
+
+/* =========================================================================
+   UI 状態
+   ========================================================================= */
+let state = defaultState();
+let activeTab = 'sheet';
+
+const $ = id => document.getElementById(id);
+const editor = $('editor');
+const statusbar = $('statusbar');
+const sheet = $('sheet');
+const previewHost = $('previewHost');
+const titleBlock = $('titleBlock');
+const pillrow = $('pillrow');
+const warnHost = $('warnHost');
+const reportArea = $('reportArea');
+const runBtn = $('btnRun');
+
+function setStatus(text, isErr) {
+  statusbar.textContent = text || '';
+  statusbar.className = isErr ? 'err' : 'ok';
+}
+function num(v) { const f = parseFloat(v); return isNaN(f) ? 0 : f; }
+
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (k === 'checked') e.checked = !!v;
+    else if (k === 'selected') { if (v) e.setAttribute('selected', ''); }
+    else if (k === 'value') e.value = v;
+    else if (v === false || v == null) { /* skip */ }
+    else e.setAttribute(k, v);
+  }
+  for (const c of children) {
+    if (c == null) continue;
+    e.append(c.nodeType ? c : document.createTextNode(c));
+  }
+  return e;
+}
+function numField(label, value, onchange) {
+  return el('label', null, label, el('input', {
+    type: 'number', step: 'any', value: value ?? '',
+    oninput: ev => { onchange(num(ev.target.value)); syncFromForm(); }
+  }));
+}
+function optNumField(label, value, onchange) {
+  return el('label', null, label, el('input', {
+    type: 'number', step: 'any', value: value ?? '',
+    oninput: ev => {
+      const t = ev.target.value.trim();
+      onchange(t === '' ? null : num(t));
+      syncFromForm();
+    }
+  }));
+}
+function pointsTable(pts, rerender) {
+  const tbl = el('table', { class: 'grid-table' });
+  tbl.append(el('tr', null, el('th', null, '#'), el('th', null, 'x (m)'), el('th', null, 'y (m)'), el('th', null, '')));
+  pts.forEach((p, i) => {
+    tbl.append(el('tr', null,
+      el('td', null, String(i + 1)),
+      el('td', null, el('input', { type: 'number', step: 'any', value: p[0], oninput: ev => { p[0] = num(ev.target.value); syncFromForm(); } })),
+      el('td', null, el('input', { type: 'number', step: 'any', value: p[1], oninput: ev => { p[1] = num(ev.target.value); syncFromForm(); } })),
+      el('td', null, el('button', { class: 'mini-btn del', type: 'button', onclick: () => { pts.splice(i, 1); rerender(); syncFromForm(); } }, '×'))
+    ));
+  });
+  const addRow = el('button', {
+    class: 'mini-btn add', type: 'button', onclick: () => {
+      const last = pts[pts.length - 1] || [0, 0];
+      pts.push([last[0] + 5, last[1]]);
+      rerender(); syncFromForm();
+    }
+  }, '＋ 点を追加');
+  return el('div', null, tbl, addRow);
+}
+
+function renderSheet() {
+  sheet.textContent = '';
+  const sec = state.section = state.section || {};
+  sec.layers = sec.layers || [];
+
+  /* --- 断面・土層 --- */
+  const dLayers = el('details', { class: 'card', open: '' }, el('summary', null, '断面・土層'));
+  const bodyL = el('div', { class: 'card-body' });
+  bodyL.append(el('div', { class: 'field-row' },
+    el('label', null, '断面名', el('input', { type: 'text', size: 26, value: sec.name || '', oninput: ev => { sec.name = ev.target.value; syncFromForm(); } }))));
+  bodyL.append(el('p', { class: 'hint' }, '層は上から順に登録する。1層目の上面が堤防表面。座標は左→右（x昇順）、y は標高 (m)。'));
+  sec.layers.forEach((ly, i) => {
+    const card = el('div', { class: 'layer-card' });
+    card.append(el('h4', null, `第${i + 1}層`));
+    card.append(el('div', { class: 'field-row' },
+      el('label', null, '層名', el('input', { type: 'text', size: 12, value: ly.name || '', oninput: ev => { ly.name = ev.target.value; syncFromForm(); } })),
+      numField('γt', ly.gamma, v => ly.gamma = v),
+      numField('γsat', ly.gamma_sat, v => ly.gamma_sat = v),
+      numField('c', ly.c, v => ly.c = v),
+      numField('φ', ly.phi, v => ly.phi = v)));
+    const liqOn = !!ly.liquefaction;
+    card.append(el('div', { class: 'field-row' },
+      el('label', null, el('input', {
+        type: 'checkbox', checked: liqOn, onchange: ev => {
+          if (ev.target.checked) ly.liquefaction = { n_value: 10, fines_content: 10 }; else delete ly.liquefaction;
+          renderSheet(); syncFromForm();
+        }
+      }), '液状化特性'),
+      liqOn ? numField('N値', ly.liquefaction.n_value, v => ly.liquefaction.n_value = v) : null,
+      liqOn ? numField('FC(%)', ly.liquefaction.fines_content, v => ly.liquefaction.fines_content = v) : null));
+    card.append(el('div', { class: 'hint' }, '層上面の座標'));
+    ly.top = ly.top || [[0, 0], [10, 0]];
+    card.append(pointsTable(ly.top, renderSheet));
+    card.append(el('button', { class: 'mini-btn del', type: 'button', onclick: () => { sec.layers.splice(i, 1); renderSheet(); syncFromForm(); } }, 'この層を削除'));
+    bodyL.append(card);
+  });
+  bodyL.append(el('button', {
+    class: 'mini-btn add', type: 'button', onclick: () => {
+      const last = sec.layers[sec.layers.length - 1];
+      sec.layers.push({
+        name: `第${sec.layers.length + 1}層`,
+        top: last ? JSON.parse(JSON.stringify(last.top)) : [[0, 0], [10, 0]],
+        gamma: 18, gamma_sat: 19, c: 10, phi: 25
+      });
+      renderSheet(); syncFromForm();
+    }
+  }, '＋ 層を追加'));
+  dLayers.append(bodyL);
+  sheet.append(dLayers);
+
+  /* --- 水条件 --- */
+  const dWater = el('details', { class: 'card', open: '' }, el('summary', null, '水条件（浸潤線・外水位）'));
+  const bodyW = el('div', { class: 'card-body' });
+  const mode = sec.phreatic ? 'points' : (sec.seepage ? 'auto' : 'none');
+  const radios = el('div', { class: 'field-row' });
+  [['none', 'なし'], ['auto', '自動推定（カサグランデ）'], ['points', '座標で入力']].forEach(([v, lbl]) => {
+    radios.append(el('label', null, el('input', {
+      type: 'radio', name: 'phmode', checked: mode === v, onchange: () => {
+        if (v === 'none') { delete sec.phreatic; delete sec.seepage; }
+        else if (v === 'auto') { delete sec.phreatic; sec.seepage = sec.seepage || { water_level: 4.0, waterside: 'left', tail_level: 0.0 }; }
+        else { delete sec.seepage; sec.phreatic = sec.phreatic || [[0, 2], [20, 1]]; }
+        renderSheet(); syncFromForm();
+      }
+    }), lbl));
+  });
+  bodyW.append(el('div', { class: 'hint' }, '浸潤線'), radios);
+  if (mode === 'auto') {
+    const sp = sec.seepage;
+    bodyW.append(el('div', { class: 'field-row' },
+      numField('外水位 (m)', sp.water_level, v => sp.water_level = v),
+      el('label', null, '川表側', el('select', { onchange: ev => { sp.waterside = ev.target.value; syncFromForm(); } },
+        el('option', { value: 'left', selected: sp.waterside !== 'right' }, '左'),
+        el('option', { value: 'right', selected: sp.waterside === 'right' }, '右'))),
+      numField('裏水位 (m)', sp.tail_level, v => sp.tail_level = v)));
+  } else if (mode === 'points') {
+    bodyW.append(pointsTable(sec.phreatic, renderSheet));
+  }
+  const extOn = !!sec.external_water;
+  bodyW.append(el('div', { class: 'field-row' },
+    el('label', null, el('input', {
+      type: 'checkbox', checked: extOn, onchange: ev => {
+        if (ev.target.checked) sec.external_water = [[0, 3], [10, 3]]; else delete sec.external_water;
+        renderSheet(); syncFromForm();
+      }
+    }), '外水位（河川水位）を設定')));
+  if (extOn) bodyW.append(pointsTable(sec.external_water, renderSheet));
+  dWater.append(bodyW);
+  sheet.append(dWater);
+
+  /* --- 荷重・クラック --- */
+  const dLoad = el('details', { class: 'card' }, el('summary', null, '上載荷重・テンションクラック'));
+  const bodyQ = el('div', { class: 'card-body' });
+  const scs = sec.surcharges = sec.surcharges || [];
+  scs.forEach((sc, i) => {
+    bodyQ.append(el('div', { class: 'field-row' },
+      el('label', null, '名称', el('input', { type: 'text', size: 10, value: sc.name || '載荷重', oninput: ev => { sc.name = ev.target.value; syncFromForm(); } })),
+      numField('x開始', sc.x_start, v => sc.x_start = v),
+      numField('x終了', sc.x_end, v => sc.x_end = v),
+      numField('q (kN/m²)', sc.q, v => sc.q = v),
+      el('button', { class: 'mini-btn del', type: 'button', onclick: () => { scs.splice(i, 1); renderSheet(); syncFromForm(); } }, '×')));
+  });
+  bodyQ.append(el('button', { class: 'mini-btn add', type: 'button', onclick: () => { scs.push({ name: '載荷重', x_start: 0, x_end: 5, q: 10 }); renderSheet(); syncFromForm(); } }, '＋ 載荷重を追加'));
+  if (!scs.length) delete sec.surcharges;
+  const tcOn = !!sec.tension_crack;
+  bodyQ.append(el('div', { class: 'field-row' },
+    el('label', null, el('input', {
+      type: 'checkbox', checked: tcOn, onchange: ev => {
+        if (ev.target.checked) sec.tension_crack = { depth: 1.0, water_depth: 0.0 }; else delete sec.tension_crack;
+        renderSheet(); syncFromForm();
+      }
+    }), 'テンションクラック'),
+    tcOn ? numField('深さ zc (m)', sec.tension_crack.depth, v => sec.tension_crack.depth = v) : null,
+    tcOn ? numField('水深 zw (m)', sec.tension_crack.water_depth, v => sec.tension_crack.water_depth = v) : null));
+  dLoad.append(bodyQ);
+  sheet.append(dLoad);
+
+  /* --- 照査ケース --- */
+  const dCases = el('details', { class: 'card', open: '' }, el('summary', null, '照査ケース'));
+  const bodyC = el('div', { class: 'card-body' });
+  state.cases = state.cases || [];
+  const tbl = el('table', { class: 'grid-table' });
+  tbl.append(el('tr', null, ...['ケース名', 'kh', 'Fsa', '解析法', '液状化', ''].map(hh => el('th', null, hh))));
+  state.cases.forEach((c, i) => {
+    tbl.append(el('tr', null,
+      el('td', null, el('input', { type: 'text', value: c.name || '', oninput: ev => { c.name = ev.target.value; syncFromForm(); } })),
+      el('td', null, el('input', { type: 'number', step: 'any', value: c.kh ?? 0, oninput: ev => { c.kh = num(ev.target.value); syncFromForm(); } })),
+      el('td', null, el('input', { type: 'number', step: 'any', value: c.allowable_fs ?? 1.2, oninput: ev => { c.allowable_fs = num(ev.target.value); syncFromForm(); } })),
+      el('td', null, el('select', { onchange: ev => { c.method = ev.target.value; syncFromForm(); } },
+        el('option', { value: 'fellenius', selected: c.method !== 'bishop' }, 'フェレニウス'),
+        el('option', { value: 'bishop', selected: c.method === 'bishop' }, 'ビショップ'))),
+      el('td', null, el('input', {
+        type: 'checkbox', checked: !!c.consider_liquefaction, onchange: ev => {
+          if (ev.target.checked) c.consider_liquefaction = true; else delete c.consider_liquefaction;
+          syncFromForm();
+        }
+      })),
+      el('td', null, el('button', { class: 'mini-btn del', type: 'button', onclick: () => { state.cases.splice(i, 1); renderSheet(); syncFromForm(); } }, '×'))
+    ));
+  });
+  bodyC.append(tbl);
+  bodyC.append(el('button', {
+    class: 'mini-btn add', type: 'button', onclick: () => {
+      state.cases.push({ name: 'ケース', kh: 0.0, allowable_fs: 1.2, method: 'fellenius' });
+      renderSheet(); syncFromForm();
+    }
+  }, '＋ ケースを追加'));
+  dCases.append(bodyC);
+  sheet.append(dCases);
+
+  /* --- 探索設定 --- */
+  const dGrid = el('details', { class: 'card' }, el('summary', null, '探索設定（すべり円）'));
+  const bodyG = el('div', { class: 'card-body' });
+  const g = state.grid = state.grid || {};
+  function gOpt(label, key) { return optNumField(label, g[key], v => { if (v === null) delete g[key]; else g[key] = v; }); }
+  bodyG.append(el('p', { class: 'hint' }, '空欄は断面から自動設定。'));
+  bodyG.append(el('div', { class: 'field-row' }, gOpt('分割数', 'n_slices'), gOpt('中心x分割', 'nx'), gOpt('中心y分割', 'ny'), gOpt('接線分割', 'nr')));
+  bodyG.append(el('div', { class: 'hint' }, '拘束条件（空欄は制約なし）'));
+  bodyG.append(el('div', { class: 'field-row' }, gOpt('下限標高', 'y_lower_limit'), gOpt('始端x最小', 'x_entry_min'), gOpt('始端x最大', 'x_entry_max'), gOpt('終端x最小', 'x_exit_min'), gOpt('終端x最大', 'x_exit_max')));
+  dGrid.append(bodyG);
+  sheet.append(dGrid);
+}
+
+/* --- 同期・プレビュー --- */
+let previewTimer = null;
+function syncFromForm() {
+  editor.value = JSON.stringify(state, null, 2);
+  schedulePreview();
+}
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(updatePreview, 260);
+}
+
+function updatePreview() {
+  try {
+    const section = resolveSection(state.section);
+    const warnings = validateInput(section, state.cases || []);
+    const { sx, sy, w, h } = makeTransform(section, []);
+    previewHost.textContent = '';
+    previewHost.append(stampSvgStyle(buildCaseSvg(section, null, sx, sy, w, h)));
+    titleBlock.innerHTML = `
+      <span class="tb-item">断面 <b>${escapeHtml(section.name || '無題')}</b></span>
+      <span class="tb-item">層数 <b>${section.layers.length}</b></span>
+      <span class="tb-item">ケース数 <b>${(state.cases || []).length}</b></span>`;
+    if (warnings.length) {
+      warnHost.innerHTML = `<div class="warnbox"><div class="wtitle">⚠ 入力診断</div>
+        <ul>${warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>`;
+      setStatus('入力診断: 警告があります', true);
+    } else {
+      warnHost.innerHTML = '';
+      setStatus('プレビュー更新', false);
+    }
+  } catch (e) {
+    setStatus('入力エラー: ' + e.message, true);
+  }
+}
+function escapeHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+/* --- JSON タブ --- */
+editor.addEventListener('input', () => {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    try { state = JSON.parse(editor.value); } catch (e) { setStatus('JSON 構文エラー: ' + e.message, true); return; }
+    updatePreview();
+  }, 500);
+});
+
+function activate(tab) {
+  activeTab = tab;
+  $('tabSheet').classList.toggle('active', tab === 'sheet');
+  $('tabJson').classList.toggle('active', tab === 'json');
+  sheet.classList.toggle('active', tab === 'sheet');
+  $('jsonPane').classList.toggle('active', tab === 'json');
+  if (tab === 'sheet') {
+    try { state = JSON.parse(editor.value); } catch (e) { setStatus('JSON 構文エラーのため直前の状態を表示します', true); }
+    renderSheet();
+  } else {
+    editor.value = JSON.stringify(state, null, 2);
+  }
+}
+$('tabSheet').addEventListener('click', () => activate('sheet'));
+$('tabJson').addEventListener('click', () => activate('json'));
+
+/* --- 実行 --- */
+runBtn.addEventListener('click', async () => {
+  if (activeTab === 'json') {
+    try { state = JSON.parse(editor.value); } catch (e) { setStatus('JSON 構文エラー: ' + e.message, true); return; }
+  }
+  runBtn.disabled = true;
+  setStatus('照査を計算中…', false);
+  await new Promise(r => setTimeout(r, 10)); // UI を先に更新させる
+  try {
+    const section = resolveSection(state.section);
+    const cases = state.cases || [];
+    const grid = state.grid || {};
+    const warnings = validateInput(section, cases);
+    const results = runAll(section, cases, grid);
+
+    // ピル（サマリ）
+    pillrow.innerHTML = '';
+    for (const r of results) {
+      const ok = r.critical ? r.critical.fs >= r.case.allowable_fs : false;
+      const cls = r.critical ? (ok ? 'ok' : 'ng') : 'pending';
+      const fsTxt = r.critical ? r.critical.fs.toFixed(3) : '—';
+      const pill = document.createElement('div');
+      pill.className = 'pill ' + cls;
+      pill.innerHTML = `<span class="dot"></span>${escapeHtml(r.case.name)}
+        <span class="fs-val">Fs=${fsTxt}</span> / Fsa=${r.case.allowable_fs}
+        <b>${r.critical ? (ok ? 'OK' : 'NG') : '算定不能'}</b>`;
+      pillrow.append(pill);
+    }
+
+    // 詳細レポート（ケースごとの断面図）
+    const { sx, sy, w, h } = makeTransform(section, results);
+    reportArea.innerHTML = '';
+    results.forEach(r => {
+      const secC = sectionForCase(section, r.case);
+      const block = document.createElement('div');
+      block.className = 'case-block';
+      const method = r.case.method === 'bishop' ? '簡易ビショップ法' : '修正フェレニウス法';
+      const head = document.createElement('div');
+      head.className = 'case-head';
+      head.textContent = `${r.case.name}　(${method}, kh=${r.case.kh})`;
+      block.append(head);
+      const hostDiv = document.createElement('div');
+      hostDiv.style.padding = '10px 12px 4px';
+      const svg = stampSvgStyle(buildCaseSvg(secC, r, sx, sy, w, h));
+      hostDiv.append(svg);
+      block.append(hostDiv);
+      const meta = document.createElement('div');
+      meta.className = 'case-meta';
+      if (r.critical) {
+        meta.textContent = `中心 (x=${r.critical.xc.toFixed(2)}, y=${r.critical.yc.toFixed(2)})　半径 R=${r.critical.r.toFixed(2)} m　評価円数 ${r.evaluated}`;
+      } else {
+        meta.textContent = '有効なすべり円が見つかりませんでした。';
+      }
+      block.append(meta);
+      reportArea.append(block);
+    });
+
+    if (warnings.length) {
+      warnHost.innerHTML = `<div class="warnbox"><div class="wtitle">⚠ 入力診断</div>
+        <ul>${warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>`;
+    } else {
+      warnHost.innerHTML = '';
+    }
+    setStatus('照査完了', false);
+  } catch (e) {
+    setStatus('解析エラー: ' + e.message, true);
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+/* --- 読込・保存 --- */
+$('btnLoad').addEventListener('click', () => $('fileInput').click());
+$('fileInput').addEventListener('change', ev => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try { state = JSON.parse(r.result); } catch (e) { setStatus('読込んだファイルが JSON として解釈できません', true); return; }
+    editor.value = JSON.stringify(state, null, 2);
+    if (activeTab === 'sheet') renderSheet();
+    updatePreview();
+  };
+  r.readAsText(f);
+});
+$('btnSave').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'teibo_input.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+$('darkToggle').addEventListener('change', ev => {
+  document.documentElement.setAttribute('data-theme', ev.target.checked ? 'dark' : 'light');
+});
+
+/* --- 初期化 --- */
+renderSheet();
+editor.value = JSON.stringify(state, null, 2);
+updatePreview();
+</script>
+
+</body>
+</html>
