@@ -67,6 +67,47 @@ class PhreaticLine:
 
 
 @dataclass
+class Surcharge:
+    """上載荷重（等分布荷重）。
+
+    地表面上の x_start〜x_end に鉛直下向きの等分布荷重 q (kN/m2) を
+    載荷する。スライス重量に q×幅 として加算され、震度 kh の
+    慣性力にも寄与する。
+    """
+
+    x_start: float
+    x_end: float
+    q: float
+    name: str = "載荷重"
+
+    def __post_init__(self) -> None:
+        if self.x_end <= self.x_start:
+            raise ValueError(f"載荷重 '{self.name}': x_end > x_start が必要です")
+        if self.q < 0:
+            raise ValueError(f"載荷重 '{self.name}': q は 0 以上が必要です")
+
+
+@dataclass
+class TensionCrack:
+    """テンションクラック（引張亀裂）。
+
+    Attributes:
+        depth:       亀裂深さ zc (m)。地表面からの鉛直深さ。
+        water_depth: 亀裂内の水深 zw (m)（0〜zc）。亀裂内水圧
+                     Pw = ½·γw·zw² が水平力として起動側に作用する。
+    """
+
+    depth: float
+    water_depth: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.depth <= 0:
+            raise ValueError("テンションクラック: depth は正の値が必要です")
+        if not (0.0 <= self.water_depth <= self.depth):
+            raise ValueError("テンションクラック: 0 <= water_depth <= depth が必要です")
+
+
+@dataclass
 class Section:
     """堤防断面。
 
@@ -77,6 +118,15 @@ class Section:
     layers: List[SoilLayer]
     phreatic: Optional[PhreaticLine] = None
     name: str = "堤防断面"
+    # 上載荷重（複数可）
+    surcharges: List[Surcharge] = field(default_factory=list)
+    # 外水位（河川水位）。地表面より上の水は重量として作用し、
+    # 間隙水圧の水頭にも採用される。
+    external_water: Optional[List[Point]] = None
+    # テンションクラック
+    tension_crack: Optional[TensionCrack] = None
+    # 浸潤線が自動推定によるものかどうか（レポート注記用）
+    phreatic_estimated: bool = False
 
     def __post_init__(self) -> None:
         if not self.layers:
@@ -97,12 +147,18 @@ class LoadCase:
         kh:          設計水平震度。常時は 0。
         allowable_fs: 必要安全率 Fsa。
         method:      "fellenius"（修正フェレニウス法）または "bishop"（簡易ビショップ法）。
+        phreatic:    ケース専用の浸潤線（水位急降下時の残留間隙水圧など）。
+                     None なら断面の浸潤線をそのまま用いる。
+        external_water: ケース専用の外水位。None なら断面の設定を継承、
+                     空リストなら「外水なし」（水位急降下時など）。
     """
 
     name: str
     kh: float = 0.0
     allowable_fs: float = 1.2
     method: str = "fellenius"
+    phreatic: Optional[PhreaticLine] = None
+    external_water: Optional[List[Point]] = None
 
     def __post_init__(self) -> None:
         m = self.method.lower()
@@ -131,6 +187,38 @@ class SearchGrid:
     nr: int = 12
     # 1つの円あたりの分割数
     n_slices: int = 40
+    # --- すべり円の拘束条件（いずれも None なら制約なし） ---
+    # 円弧下端（yc - R）がこの標高より下に入る円を除外する
+    y_lower_limit: Optional[float] = None
+    # すべり始端 xl（左側交点）の許容範囲
+    x_entry_min: Optional[float] = None
+    x_entry_max: Optional[float] = None
+    # すべり終端 xr（右側交点）の許容範囲
+    x_exit_min: Optional[float] = None
+    x_exit_max: Optional[float] = None
+
+
+@dataclass
+class SensitivityTarget:
+    """感度分析の対象パラメータ。
+
+    layer で指定した土層の param（c / phi / gamma / gamma_sat）を
+    values の各値に差し替えて Fs の変化を調べる。
+    """
+
+    layer: str
+    param: str
+    values: List[float]
+
+    _PARAMS = ("c", "phi", "gamma", "gamma_sat")
+
+    def __post_init__(self) -> None:
+        if self.param not in self._PARAMS:
+            raise ValueError(
+                f"感度分析: param は {self._PARAMS} のいずれかを指定してください"
+            )
+        if not self.values:
+            raise ValueError("感度分析: values が空です")
 
 
 @dataclass
@@ -140,3 +228,4 @@ class AnalysisInput:
     section: Section
     cases: List[LoadCase] = field(default_factory=list)
     grid: SearchGrid = field(default_factory=SearchGrid)
+    sensitivity: List[SensitivityTarget] = field(default_factory=list)

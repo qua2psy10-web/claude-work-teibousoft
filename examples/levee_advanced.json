@@ -1,0 +1,66 @@
+{
+  "section": {
+    "name": "河川堤防 標準断面（拡張機能デモ: 堤高5.0m 法勾配1:2.0）",
+    "layers": [
+      {
+        "name": "盛土（堤体）",
+        "top": [[-5, 0], [0, 0], [10, 5], [13, 5], [23, 0], [40, 0]],
+        "gamma": 18.0,
+        "gamma_sat": 19.0,
+        "c": 10.0,
+        "phi": 25.0
+      },
+      {
+        "name": "基礎地盤",
+        "top": [[-5, 0], [40, 0]],
+        "gamma": 17.0,
+        "gamma_sat": 18.0,
+        "c": 15.0,
+        "phi": 20.0
+      }
+    ],
+    "seepage": {
+      "water_level": 4.0,
+      "waterside": "left",
+      "tail_level": 0.5
+    },
+    "external_water": [[-5, 4], [8, 4]],
+    "surcharges": [
+      { "name": "天端載荷重", "x_start": 10.0, "x_end": 13.0, "q": 10.0 }
+    ],
+    "tension_crack": { "depth": 1.0, "water_depth": 0.5 }
+  },
+  "cases": [
+    {
+      "name": "常時",
+      "kh": 0.0,
+      "allowable_fs": 1.2,
+      "method": "fellenius"
+    },
+    {
+      "name": "水位急降下時",
+      "kh": 0.0,
+      "allowable_fs": 1.2,
+      "method": "fellenius",
+      "external_water": [],
+      "phreatic": [[-5, 4], [8, 4], [13, 3.5], [23, 1.0], [40, 0.5]]
+    },
+    {
+      "name": "地震時",
+      "kh": 0.15,
+      "allowable_fs": 1.0,
+      "method": "fellenius"
+    }
+  ],
+  "grid": {
+    "nx": 12,
+    "ny": 12,
+    "nr": 10,
+    "n_slices": 40,
+    "y_lower_limit": -3.0,
+    "x_entry_min": 8.0
+  },
+  "sensitivity": [
+    { "layer": "盛土（堤体）", "param": "c", "values": [5.0, 10.0, 15.0] }
+  ]
+}

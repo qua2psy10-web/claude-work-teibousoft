@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Optional
 
 from .model import LoadCase, Section, SearchGrid
@@ -52,6 +52,11 @@ def _auto_grid(section: Section, grid: SearchGrid) -> SearchGrid:
         tangent_y_max=grid.tangent_y_max,
         nr=grid.nr,
         n_slices=grid.n_slices,
+        y_lower_limit=grid.y_lower_limit,
+        x_entry_min=grid.x_entry_min,
+        x_entry_max=grid.x_entry_max,
+        x_exit_min=grid.x_exit_min,
+        x_exit_max=grid.x_exit_max,
     )
 
     # 円中心は天端側の上方に置くのが一般的
@@ -69,7 +74,27 @@ def _auto_grid(section: Section, grid: SearchGrid) -> SearchGrid:
         g.tangent_y_min = ymin - max(height * 1.0, 3.0)
     if g.tangent_y_max is None:
         g.tangent_y_max = ymin + height * 0.5
+    # 下限拘束があれば接線範囲も切り上げる
+    if g.y_lower_limit is not None and g.tangent_y_min < g.y_lower_limit:
+        g.tangent_y_min = g.y_lower_limit
     return g
+
+
+def _passes_constraints(g: SearchGrid, res: CircleResult) -> bool:
+    """すべり円の拘束条件（始端・終端位置）を満たすか判定する。"""
+    if not res.slices:
+        return False
+    xl = res.slices[0].x_mid - res.slices[0].width / 2
+    xr = res.slices[-1].x_mid + res.slices[-1].width / 2
+    if g.x_entry_min is not None and xl < g.x_entry_min:
+        return False
+    if g.x_entry_max is not None and xl > g.x_entry_max:
+        return False
+    if g.x_exit_min is not None and xr < g.x_exit_min:
+        return False
+    if g.x_exit_max is not None and xr > g.x_exit_max:
+        return False
+    return True
 
 
 def search_critical(
@@ -91,8 +116,10 @@ def search_critical(
                 r = yc - ty
                 if r <= 0.1:
                     continue
+                if g.y_lower_limit is not None and yc - r < g.y_lower_limit - 1e-9:
+                    continue
                 res = analyze_circle(section, case, xc, yc, r, g.n_slices)
-                if res is None:
+                if res is None or not _passes_constraints(g, res):
                     continue
                 count += 1
                 if best is None or res.fs < best.fs:
@@ -131,10 +158,19 @@ def _refine(
                     r = yc - ty
                     if r <= 0.1:
                         continue
+                    if (
+                        g.y_lower_limit is not None
+                        and yc - r < g.y_lower_limit - 1e-9
+                    ):
+                        continue
                     res = analyze_circle(
                         section, case, xc, yc, r, g.n_slices
                     )
-                    if res is not None and res.fs < best.fs:
+                    if (
+                        res is not None
+                        and res.fs < best.fs
+                        and _passes_constraints(g, res)
+                    ):
                         best = res
     return best
 
@@ -145,5 +181,19 @@ def _linspace(a: float, b: float, n: int) -> List[float]:
     return [a + (b - a) * i / (n - 1) for i in range(n)]
 
 
+def section_for_case(section: Section, case: LoadCase) -> Section:
+    """ケース専用の水条件（水位急降下時など）を差し替えた断面を返す。"""
+    changes = {}
+    if case.phreatic is not None:
+        changes["phreatic"] = case.phreatic
+        changes["phreatic_estimated"] = False
+    if case.external_water is not None:
+        # 空リストは「外水なし」を意味する
+        changes["external_water"] = case.external_water or None
+    if not changes:
+        return section
+    return replace(section, **changes)
+
+
 def run_all(section: Section, cases: List[LoadCase], grid: SearchGrid) -> List[CaseResult]:
-    return [search_critical(section, c, grid) for c in cases]
+    return [search_critical(section_for_case(section, c), c, grid) for c in cases]

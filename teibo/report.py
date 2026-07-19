@@ -7,7 +7,8 @@ import math
 from typing import List, Optional, Tuple
 
 from .model import Section
-from .search import CaseResult
+from .search import CaseResult, section_for_case
+from .sensitivity import SensitivityResult
 from .stability import CircleResult
 
 
@@ -31,9 +32,25 @@ def text_report(section: Section, results: List[CaseResult]) -> str:
             f"{ly.c:>7.1f}{ly.phi:>7.1f}"
         )
     if section.phreatic:
-        lines.append("  浸潤線: 設定あり")
+        note = "（カサグランデ基本放物線による自動推定）" if section.phreatic_estimated else ""
+        lines.append(f"  浸潤線: 設定あり{note}")
     else:
         lines.append("  浸潤線: なし（乾燥状態）")
+    if section.external_water:
+        lines.append("  外水位: 設定あり")
+    if section.surcharges:
+        lines.append("\n【上載荷重】")
+        for sc in section.surcharges:
+            lines.append(
+                f"  {sc.name}: x={sc.x_start:.2f}〜{sc.x_end:.2f} m, "
+                f"q={sc.q:.1f} kN/m2"
+            )
+    if section.tension_crack:
+        tc = section.tension_crack
+        lines.append(
+            f"  テンションクラック: 深さ zc={tc.depth:.2f} m, "
+            f"水深 zw={tc.water_depth:.2f} m"
+        )
 
     lines.append("\n【照査結果】")
     for r in results:
@@ -43,6 +60,11 @@ def text_report(section: Section, results: List[CaseResult]) -> str:
         lines.append(f"  ケース   : {c.name}")
         lines.append(f"  解析法   : {method}")
         lines.append(f"  水平震度 : kh = {c.kh:.3f}")
+        if c.phreatic is not None:
+            lines.append("  浸潤線   : ケース専用の浸潤線を使用（水位急降下等）")
+        if c.external_water is not None:
+            note = "外水なし" if not c.external_water else "ケース専用の外水位"
+            lines.append(f"  外水位   : {note}")
         lines.append(f"  必要安全率: Fsa = {c.allowable_fs:.2f}")
         if r.critical is None:
             lines.append("  結果     : 有効なすべり円が見つかりませんでした")
@@ -59,6 +81,30 @@ def text_report(section: Section, results: List[CaseResult]) -> str:
     return "\n".join(lines)
 
 
+def sensitivity_text_report(sens: List[SensitivityResult]) -> str:
+    """感度分析結果のテキストレポート。"""
+    lines: List[str] = []
+    lines.append("=" * 60)
+    lines.append(" 感度分析結果")
+    lines.append("=" * 60)
+    for res in sens:
+        t = res.target
+        lines.append(f"\n【{t.layer} の {res.param_label}】")
+        header = f"  {'値':>10} |" + "".join(
+            f"{name:>12}" for name in res.case_names
+        )
+        lines.append(header)
+        lines.append("  " + "-" * (len(header) - 2))
+        for row in res.rows:
+            cells = "".join(
+                f"{('%.3f' % fs) if fs is not None else '—':>12}"
+                for fs in row.fs_by_case
+            )
+            lines.append(f"  {row.value:>10.2f} |{cells}")
+    lines.append("=" * 60)
+    return "\n".join(lines)
+
+
 def _bounds(section: Section) -> Tuple[float, float, float, float]:
     xs: List[float] = []
     ys: List[float] = []
@@ -70,6 +116,10 @@ def _bounds(section: Section) -> Tuple[float, float, float, float]:
         for p in section.phreatic.points:
             xs.append(p.x)
             ys.append(p.y)
+    if section.external_water:
+        for p in section.external_water:
+            xs.append(p.x)
+            ys.append(p.y)
     xmin, xmax = min(xs), max(xs)
     ymin, ymax = min(ys), max(ys)
     # 下方に余白（最下層を描画するため）
@@ -77,7 +127,11 @@ def _bounds(section: Section) -> Tuple[float, float, float, float]:
     return xmin, xmax, ymin, ymax
 
 
-def html_report(section: Section, results: List[CaseResult]) -> str:
+def html_report(
+    section: Section,
+    results: List[CaseResult],
+    sensitivity: Optional[List[SensitivityResult]] = None,
+) -> str:
     """HTML レポート（SVG 断面図つき）。"""
     xmin, xmax, ymin, ymax = _bounds(section)
     # 臨界円が枠外に出る場合は拡張
@@ -105,7 +159,9 @@ def html_report(section: Section, results: List[CaseResult]) -> str:
 
     svgs: List[str] = []
     for r in results:
-        svgs.append(_svg_for_case(section, r, sx, sy, poly, w, h))
+        # ケース専用の浸潤線（水位急降下時など）を反映した断面で描画
+        sec_c = section_for_case(section, r.case)
+        svgs.append(_svg_for_case(sec_c, r, sx, sy, poly, w, h))
 
     # HTML 組み立て
     parts: List[str] = []
@@ -127,6 +183,34 @@ def html_report(section: Section, results: List[CaseResult]) -> str:
             f"<td>{ly.phi:.1f}</td></tr>"
         )
     parts.append("</table>")
+
+    # 荷重・水条件
+    notes: List[str] = []
+    if section.phreatic:
+        if section.phreatic_estimated:
+            notes.append("浸潤線: カサグランデ基本放物線による自動推定")
+        else:
+            notes.append("浸潤線: 入力値")
+    else:
+        notes.append("浸潤線: なし（乾燥状態）")
+    if section.external_water:
+        notes.append("外水位: 設定あり（水重・間隙水圧に考慮）")
+    for sc in section.surcharges:
+        notes.append(
+            f"{html.escape(sc.name)}: x={sc.x_start:.2f}〜{sc.x_end:.2f} m, "
+            f"q={sc.q:.1f} kN/m²"
+        )
+    if section.tension_crack:
+        tc = section.tension_crack
+        notes.append(
+            f"テンションクラック: 深さ zc={tc.depth:.2f} m, 水深 zw={tc.water_depth:.2f} m"
+        )
+    if notes:
+        parts.append("<h2>荷重・水条件</h2>")
+        parts.append("<ul>")
+        for n in notes:
+            parts.append(f"<li>{n}</li>")
+        parts.append("</ul>")
 
     # 照査サマリ
     parts.append("<h2>照査結果一覧</h2>")
@@ -160,6 +244,25 @@ def html_report(section: Section, results: List[CaseResult]) -> str:
                 f"半径 R={cr.r:.2f} m　最小安全率 Fs={cr.fs:.3f}</p>"
             )
         parts.append(svg)
+
+    # 感度分析
+    if sensitivity:
+        parts.append("<h2>感度分析</h2>")
+        for res in sensitivity:
+            t = res.target
+            parts.append(
+                f"<h3>{html.escape(t.layer)} の {html.escape(res.param_label)}</h3>"
+            )
+            parts.append("<table class='result'>")
+            head = "".join(f"<th>{html.escape(n)}</th>" for n in res.case_names)
+            parts.append(f"<tr><th>値</th>{head}</tr>")
+            for row in res.rows:
+                cells = "".join(
+                    f"<td>{('%.3f' % fs) if fs is not None else '—'}</td>"
+                    for fs in row.fs_by_case
+                )
+                parts.append(f"<tr><td>{row.value:.2f}</td>{cells}</tr>")
+            parts.append("</table>")
 
     body = "\n".join(parts)
     return _HTML_TEMPLATE.replace("{{BODY}}", body)
@@ -195,6 +298,82 @@ def _svg_for_case(section, result: CaseResult, sx, sy, poly, w, h) -> str:
         f"stroke='#5a4a2a' stroke-width='2.5'/>"
     )
 
+    # 外水（地表面より上の水域を塗る）
+    if section.external_water:
+        from .geometry import external_water_y, surface_y as _surf_y
+
+        ew = section.external_water
+        x0w, x1w = ew[0].x, ew[-1].x
+        nsm = 120
+        region: List[Tuple[float, float, float]] = []
+        regions: List[List[Tuple[float, float, float]]] = []
+        for k in range(nsm + 1):
+            xx = x0w + (x1w - x0w) * k / nsm
+            yw_ = external_water_y(section, xx)
+            ys_ = _surf_y(section, xx)
+            if yw_ is not None and ys_ is not None and yw_ > ys_ + 1e-6:
+                region.append((xx, yw_, ys_))
+            elif region:
+                regions.append(region)
+                region = []
+        if region:
+            regions.append(region)
+        for reg in regions:
+            top = " ".join(f"{sx(x):.1f},{sy(yw_):.1f}" for x, yw_, _ in reg)
+            bot = " ".join(
+                f"{sx(x):.1f},{sy(ys_):.1f}" for x, _, ys_ in reversed(reg)
+            )
+            elems.append(
+                f"<polygon points='{top} {bot}' fill='#1e73c8' "
+                f"opacity='0.25' stroke='none'/>"
+            )
+        elems.append(
+            f"<polyline points='{poly(ew)}' fill='none' "
+            f"stroke='#1e73c8' stroke-width='2'/>"
+        )
+        p0 = ew[0]
+        elems.append(
+            f"<text x='{sx(p0.x)+4:.1f}' y='{sy(p0.y)-6:.1f}' "
+            f"class='wlbl'>外水位</text>"
+        )
+
+    # 上載荷重（下向き矢印列）
+    if section.surcharges:
+        from .geometry import surface_y as _surf_y2
+
+        for sc in section.surcharges:
+            n_arrow = 6
+            alen = 18  # 矢印長（px）
+            tail_pts = []
+            for k in range(n_arrow + 1):
+                xx = sc.x_start + (sc.x_end - sc.x_start) * k / n_arrow
+                ys_ = _surf_y2(section, xx)
+                if ys_ is None:
+                    continue
+                xpx, ypx = sx(xx), sy(ys_)
+                elems.append(
+                    f"<line x1='{xpx:.1f}' y1='{ypx-alen:.1f}' "
+                    f"x2='{xpx:.1f}' y2='{ypx-2:.1f}' "
+                    f"stroke='#b05a00' stroke-width='1.5'/>"
+                )
+                elems.append(
+                    f"<polygon points='{xpx-3:.1f},{ypx-6:.1f} "
+                    f"{xpx+3:.1f},{ypx-6:.1f} {xpx:.1f},{ypx-1:.1f}' "
+                    f"fill='#b05a00'/>"
+                )
+                tail_pts.append((xpx, ypx - alen))
+            if tail_pts:
+                line = " ".join(f"{x:.1f},{y:.1f}" for x, y in tail_pts)
+                elems.append(
+                    f"<polyline points='{line}' fill='none' "
+                    f"stroke='#b05a00' stroke-width='1.5'/>"
+                )
+                mx = 0.5 * (tail_pts[0][0] + tail_pts[-1][0])
+                elems.append(
+                    f"<text x='{mx:.1f}' y='{tail_pts[0][1]-5:.1f}' "
+                    f"class='qlbl'>q={sc.q:.0f} kN/m²</text>"
+                )
+
     # 浸潤線
     if section.phreatic:
         elems.append(
@@ -203,9 +382,10 @@ def _svg_for_case(section, result: CaseResult, sx, sy, poly, w, h) -> str:
         )
         # 水位マーク
         p0 = section.phreatic.points[0]
+        lbl = "浸潤線（推定）" if section.phreatic_estimated else "浸潤線"
         elems.append(
             f"<text x='{sx(p0.x)+4:.1f}' y='{sy(p0.y)-4:.1f}' "
-            f"class='wlbl'>浸潤線</text>"
+            f"class='wlbl'>{lbl}</text>"
         )
 
     cr: Optional[CircleResult] = result.critical
@@ -244,6 +424,22 @@ def _svg_for_case(section, result: CaseResult, sx, sy, poly, w, h) -> str:
                             f"x2='{sx(x0):.1f}' y2='{sy(ya):.1f}' "
                             f"stroke='#c0392b' stroke-width='0.4' opacity='0.5'/>"
                         )
+        # テンションクラック（すべり面上端の鉛直線）
+        if cr.crack_x is not None:
+            from .geometry import surface_y as _surf_y3
+
+            xck = cr.crack_x
+            dxc = xck - cr.xc
+            if abs(dxc) <= cr.r:
+                ya_c = cr.yc - math.sqrt(cr.r * cr.r - dxc * dxc)
+                ys_c = _surf_y3(section, xck)
+                if ys_c is not None:
+                    elems.append(
+                        f"<line x1='{sx(xck):.1f}' y1='{sy(ys_c):.1f}' "
+                        f"x2='{sx(xck):.1f}' y2='{sy(ya_c):.1f}' "
+                        f"stroke='#7a1f14' stroke-width='2' "
+                        f"stroke-dasharray='4,3'/>"
+                    )
         # 中心点
         elems.append(
             f"<circle cx='{cx:.1f}' cy='{cy:.1f}' r='3' fill='#c0392b'/>"
@@ -277,6 +473,7 @@ _HTML_TEMPLATE = """<style>
   text { font-size: 12px; font-family: sans-serif; }
   text.fslbl { font-size: 13px; font-weight: bold; }
   text.wlbl { font-size: 11px; fill: #1e73c8; }
+  text.qlbl { font-size: 11px; fill: #b05a00; text-anchor: middle; }
   @media (prefers-color-scheme: dark) {
     body { background: #1c1c1e; color: #e6e6e6; }
     th { background: #3a3320; }
