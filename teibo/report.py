@@ -127,12 +127,8 @@ def _bounds(section: Section) -> Tuple[float, float, float, float]:
     return xmin, xmax, ymin, ymax
 
 
-def html_report(
-    section: Section,
-    results: List[CaseResult],
-    sensitivity: Optional[List[SensitivityResult]] = None,
-) -> str:
-    """HTML レポート（SVG 断面図つき）。"""
+def _make_transform(section: Section, results: List[CaseResult]):
+    """断面→SVG 座標変換（sx, sy, poly, w, h）を組み立てる。"""
     xmin, xmax, ymin, ymax = _bounds(section)
     # 臨界円が枠外に出る場合は拡張
     for r in results:
@@ -153,9 +149,25 @@ def html_report(
     def sy(y: float) -> float:
         return h - pad - (y - ymin) * scale
 
-    def poly(points, closed=False) -> str:
-        pts = " ".join(f"{sx(p.x):.1f},{sy(p.y):.1f}" for p in points)
-        return pts
+    def poly(points) -> str:
+        return " ".join(f"{sx(p.x):.1f},{sy(p.y):.1f}" for p in points)
+
+    return sx, sy, poly, w, h
+
+
+def section_svg(section: Section) -> str:
+    """解析結果なしの断面プレビュー SVG（GUI 用）。"""
+    sx, sy, poly, w, h = _make_transform(section, [])
+    return _svg_for_case(section, None, sx, sy, poly, w, h)
+
+
+def html_report(
+    section: Section,
+    results: List[CaseResult],
+    sensitivity: Optional[List[SensitivityResult]] = None,
+) -> str:
+    """HTML レポート（SVG 断面図つき）。"""
+    sx, sy, poly, w, h = _make_transform(section, results)
 
     svgs: List[str] = []
     for r in results:
@@ -268,7 +280,9 @@ def html_report(
     return _HTML_TEMPLATE.replace("{{BODY}}", body)
 
 
-def _svg_for_case(section, result: CaseResult, sx, sy, poly, w, h) -> str:
+def _svg_for_case(
+    section, result: Optional[CaseResult], sx, sy, poly, w, h
+) -> str:
     elems: List[str] = []
     elems.append(
         f"<svg viewBox='0 0 {w} {h}' width='100%' "
@@ -388,7 +402,7 @@ def _svg_for_case(section, result: CaseResult, sx, sy, poly, w, h) -> str:
             f"class='wlbl'>{lbl}</text>"
         )
 
-    cr: Optional[CircleResult] = result.critical
+    cr: Optional[CircleResult] = result.critical if result is not None else None
     if cr is not None:
         cx, cy, r = sx(cr.xc), sy(cr.yc), cr.r
         rpx = r * (sx(cr.xc + 1) - sx(cr.xc))  # 半径のピクセル換算

@@ -38,12 +38,36 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="入力の sensitivity 定義に基づき感度分析も実行する",
     )
 
+    p_gui = sub.add_parser("gui", help="ブラウザ GUI を起動する")
+    p_gui.add_argument(
+        "input", nargs="?", help="初期表示する入力 JSON ファイル（省略可）"
+    )
+    p_gui.add_argument("--host", default="127.0.0.1", help="待受ホスト")
+    p_gui.add_argument("--port", type=int, default=8765, help="待受ポート")
+
     args = parser.parse_args(argv)
 
     if args.command == "analyze":
         return _cmd_analyze(args)
+    if args.command == "gui":
+        return _cmd_gui(args)
     parser.print_help()
     return 1
+
+
+def _cmd_gui(args) -> int:
+    from .webapp import serve
+
+    initial = None
+    if args.input:
+        try:
+            with open(args.input, "r", encoding="utf-8") as f:
+                initial = f.read()
+        except OSError as e:
+            print(f"エラー: 入力ファイルを読めません: {e}", file=sys.stderr)
+            return 2
+    serve(host=args.host, port=args.port, initial_input=initial)
+    return 0
 
 
 def _cmd_analyze(args) -> int:
