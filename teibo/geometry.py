@@ -44,6 +44,28 @@ def layer_top_y(layer: SoilLayer, x: float) -> Optional[float]:
     return interp_polyline(layer.top, x)
 
 
+def external_water_y(section: Section, x: float) -> Optional[float]:
+    """外水位（河川水位）標高。範囲外や未設定なら None。"""
+    if section.external_water is None:
+        return None
+    return interp_polyline(section.external_water, x)
+
+
+def water_overburden(section: Section, x: float) -> float:
+    """地表面より上にある外水の水柱応力 γw·(y_水面 − y_地表) (kN/m2)。
+
+    外水位が地表面より低い位置では 0。
+    """
+    yw = external_water_y(section, x)
+    if yw is None:
+        return 0.0
+    ys = surface_y(section, x)
+    if ys is None:
+        return 0.0
+    depth = yw - ys
+    return GAMMA_W * depth if depth > 0 else 0.0
+
+
 def arc_lower_y(xc: float, yc: float, r: float, x: float) -> Optional[float]:
     """すべり円（下側の弧）の標高。円の範囲外なら None。"""
     dx = x - xc
@@ -187,9 +209,18 @@ def soil_at(section: Section, x: float, y: float) -> Optional[SoilLayer]:
 
 
 def pore_pressure(section: Section, x: float, y_slip: float) -> float:
-    """すべり面上の間隙水圧 u (kN/m2)。"""
+    """すべり面上の間隙水圧 u (kN/m2)。
+
+    浸潤線と外水位の両方が定義されていれば、高い方の水頭を採用する。
+    """
+    heads = []
     yw = phreatic_y(section.phreatic, x)
-    if yw is None:
+    if yw is not None:
+        heads.append(yw)
+    ye = external_water_y(section, x)
+    if ye is not None:
+        heads.append(ye)
+    if not heads:
         return 0.0
-    head = yw - y_slip
+    head = max(heads) - y_slip
     return GAMMA_W * head if head > 0 else 0.0

@@ -12,8 +12,9 @@ import sys
 from typing import List, Optional
 
 from .io_json import load_input
-from .report import html_report, text_report
+from .report import html_report, sensitivity_text_report, text_report
 from .search import run_all
+from .sensitivity import run_sensitivity
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -30,6 +31,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     p_an.add_argument(
         "--quiet", action="store_true", help="テキスト結果を表示しない"
+    )
+    p_an.add_argument(
+        "--sensitivity",
+        action="store_true",
+        help="入力の sensitivity 定義に基づき感度分析も実行する",
     )
 
     args = parser.parse_args(argv)
@@ -52,11 +58,26 @@ def _cmd_analyze(args) -> int:
 
     results = run_all(data.section, data.cases, data.grid)
 
+    sens = None
+    if args.sensitivity:
+        if not data.sensitivity:
+            print(
+                "警告: 入力に sensitivity 定義がないため感度分析をスキップします",
+                file=sys.stderr,
+            )
+        else:
+            sens = run_sensitivity(
+                data.section, data.cases, data.grid, data.sensitivity
+            )
+
     if not args.quiet:
         print(text_report(data.section, results))
+        if sens:
+            print()
+            print(sensitivity_text_report(sens))
 
     if args.html:
-        html = html_report(data.section, results)
+        html = html_report(data.section, results, sensitivity=sens)
         with open(args.html, "w", encoding="utf-8") as f:
             f.write(html)
         print(f"\nHTML レポートを出力しました: {args.html}")
