@@ -32,9 +32,10 @@ class Slice:
     weight: float          # W (kN/m)
     alpha: float           # base 傾角 (rad)
     base_len: float        # l (m)
-    u: float               # 間隙水圧 (kN/m2)
+    u: float               # 間隙水圧 (kN/m2)。液状化考慮時は Δu を含む
     c: float               # 粘着力 (kN/m2)
     phi: float             # 内部摩擦角 (rad)
+    fl: Optional[float] = None  # 液状化抵抗率 FL（判定対象外は None）
 
 
 @dataclass
@@ -144,9 +145,19 @@ def _apply_tension_crack(
 
 
 def build_slices(
-    section: Section, xc: float, yc: float, r: float, n: int
+    section: Section,
+    xc: float,
+    yc: float,
+    r: float,
+    n: int,
+    case: Optional[LoadCase] = None,
 ) -> Optional[SlipSurface]:
-    """すべり円に対して鉛直スライスを生成する。"""
+    """すべり円に対して鉛直スライスを生成する。
+
+    case を与え、かつ case.consider_liquefaction が True の場合は、
+    液状化特性を持つ飽和層のすべり面で FL 法による過剰間隙水圧
+    Δu = ru·σv' を静水圧に加算する。
+    """
     inter = find_arc_surface_intersections(section, xc, yc, r)
     if inter is None:
         return None
@@ -197,6 +208,33 @@ def build_slices(
         c = layer.c if layer else 0.0
         phi = math.radians(layer.phi) if layer else 0.0
 
+        # 液状化（FL 法）: 液状化特性を持つ飽和層で過剰間隙水圧を加算
+        fl = None
+        if (
+            case is not None
+            and case.consider_liquefaction
+            and layer is not None
+            and layer.liquefaction is not None
+            and u > 0.0
+        ):
+            from .liquefaction import fl_value, ru_from_fl
+
+            sigma_v = column_weight(section, xm, ya, ys) + water_overburden(
+                section, xm
+            )
+            sigma_v_eff = max(sigma_v - u, 1e-6)
+            fl = fl_value(
+                layer.liquefaction.n_value,
+                layer.liquefaction.fines_content,
+                sigma_v,
+                sigma_v_eff,
+                case.kh,
+                depth=h,
+            )
+            ru = ru_from_fl(fl)
+            if ru > 0.0:
+                u = min(u + ru * sigma_v_eff, sigma_v)
+
         slices.append(
             Slice(
                 x_mid=xm,
@@ -208,6 +246,7 @@ def build_slices(
                 u=u,
                 c=c,
                 phi=phi,
+                fl=fl,
             )
         )
 
@@ -295,7 +334,7 @@ def analyze_circle(
     section: Section, case: LoadCase, xc: float, yc: float, r: float, n: int
 ) -> Optional[CircleResult]:
     """1つのすべり円について安全率を計算する。"""
-    surf = build_slices(section, xc, yc, r, n)
+    surf = build_slices(section, xc, yc, r, n, case=case)
     if surf is None:
         return None
     if case.method == "bishop":

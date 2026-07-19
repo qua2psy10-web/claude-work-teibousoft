@@ -22,6 +22,25 @@ class Point:
 
 
 @dataclass
+class LiquefactionProps:
+    """液状化判定（FL 法）に用いる土質特性。
+
+    Attributes:
+        n_value:       標準貫入試験 N 値。
+        fines_content: 細粒分含有率 FC (%)。
+    """
+
+    n_value: float
+    fines_content: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.n_value < 0:
+            raise ValueError("液状化特性: n_value は 0 以上が必要です")
+        if not (0.0 <= self.fines_content <= 100.0):
+            raise ValueError("液状化特性: fines_content は 0〜100% が必要です")
+
+
+@dataclass
 class SoilLayer:
     """土層。
 
@@ -35,6 +54,7 @@ class SoilLayer:
         gamma_sat: 飽和単位体積重量 γsat (kN/m3)。浸潤線より下で使用。
         c:         粘着力 c (kN/m2)。
         phi:       内部摩擦角 φ (度)。
+        liquefaction: 液状化判定用特性（砂質土のみ指定、None なら判定対象外）。
     """
 
     name: str
@@ -43,6 +63,7 @@ class SoilLayer:
     gamma_sat: float
     c: float
     phi: float
+    liquefaction: Optional[LiquefactionProps] = None
 
     def __post_init__(self) -> None:
         if len(self.top) < 2:
@@ -151,6 +172,11 @@ class LoadCase:
                      None なら断面の浸潤線をそのまま用いる。
         external_water: ケース専用の外水位。None なら断面の設定を継承、
                      空リストなら「外水なし」（水位急降下時など）。
+        consider_liquefaction: True の場合、液状化特性を持つ飽和層について
+                     FL 法で過剰間隙水圧を算定し安定計算へ反映する。
+        newmark:     True の場合、臨界円に対して降伏震度 ky と
+                     ニューマーク法による滑動変位量を算定する。
+        allowable_displacement: ニューマーク法の許容変位量 Da (m)。
     """
 
     name: str
@@ -159,6 +185,9 @@ class LoadCase:
     method: str = "fellenius"
     phreatic: Optional[PhreaticLine] = None
     external_water: Optional[List[Point]] = None
+    consider_liquefaction: bool = False
+    newmark: bool = False
+    allowable_displacement: float = 0.5
 
     def __post_init__(self) -> None:
         m = self.method.lower()
@@ -229,3 +258,6 @@ class AnalysisInput:
     cases: List[LoadCase] = field(default_factory=list)
     grid: SearchGrid = field(default_factory=SearchGrid)
     sensitivity: List[SensitivityTarget] = field(default_factory=list)
+    # ニューマーク法の時刻歴計算に用いる加速度波形 [(時刻 s, 加速度 gal)]。
+    # None の場合は経験式（Ambraseys & Menu）で変位量を推定する。
+    accel_series: Optional[List[Point]] = None
