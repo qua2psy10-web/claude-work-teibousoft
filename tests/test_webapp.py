@@ -51,6 +51,10 @@ def test_index_page(base_url):
     assert res.status == 200
     assert "teibo" in body
     assert "照査実行" in body
+    # 入力シート（フォーム）と JSON タブの両方がある
+    assert "入力シート" in body
+    assert "tabJson" in body
+    assert "renderForm" in body
 
 
 def test_preview_endpoint(base_url):
