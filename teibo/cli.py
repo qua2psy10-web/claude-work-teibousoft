@@ -48,14 +48,59 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_gui.add_argument("--host", default="127.0.0.1", help="待受ホスト")
     p_gui.add_argument("--port", type=int, default=8765, help="待受ポート")
 
+    p_bt = sub.add_parser("batch", help="複数断面をまとめて照査する")
+    p_bt.add_argument("inputs", nargs="+", help="入力 JSON ファイル（複数）")
+    p_bt.add_argument("--csv", metavar="FILE", help="縦断 Fs 一覧の CSV 出力先")
+    p_bt.add_argument(
+        "--html", metavar="FILE", help="HTML レポート（縦断グラフつき）の出力先"
+    )
+    p_bt.add_argument(
+        "--details",
+        action="store_true",
+        help="HTML に断面ごとの臨界円図も含める",
+    )
+    p_bt.add_argument(
+        "--quiet", action="store_true", help="テキスト結果を表示しない"
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "analyze":
         return _cmd_analyze(args)
     if args.command == "gui":
         return _cmd_gui(args)
+    if args.command == "batch":
+        return _cmd_batch(args)
     parser.print_help()
     return 1
+
+
+def _cmd_batch(args) -> int:
+    from .batch import batch_csv, batch_html_report, batch_text_report, run_batch
+
+    try:
+        entries = run_batch(args.inputs)
+    except FileNotFoundError as e:
+        print(f"エラー: 入力ファイルが見つかりません: {e.filename}", file=sys.stderr)
+        return 2
+    except Exception as e:  # noqa: BLE001
+        print(f"エラー: 入力の読み込みに失敗しました: {e}", file=sys.stderr)
+        return 2
+
+    if not args.quiet:
+        print(batch_text_report(entries))
+
+    if args.csv:
+        with open(args.csv, "w", encoding="utf-8") as f:
+            f.write(batch_csv(entries))
+        print(f"CSV を出力しました: {args.csv}")
+
+    if args.html:
+        with open(args.html, "w", encoding="utf-8") as f:
+            f.write(batch_html_report(entries, details=args.details))
+        print(f"HTML レポートを出力しました: {args.html}")
+
+    return 0 if all(e.all_ok for e in entries) else 1
 
 
 def _cmd_gui(args) -> int:

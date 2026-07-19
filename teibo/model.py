@@ -289,3 +289,6 @@ class AnalysisInput:
     accel_series: Optional[List[Point]] = None
     # 対策工の案（countermeasure.Countermeasure のリスト。循環回避のため型は緩く保持）
     countermeasures: List[object] = field(default_factory=list)
+    # 一括処理用: 距離標（例 "0k200"）と縦断方向の累積距離 (m)
+    station: Optional[str] = None
+    distance: Optional[float] = None
