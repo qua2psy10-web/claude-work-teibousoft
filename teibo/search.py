@@ -100,7 +100,19 @@ def _passes_constraints(g: SearchGrid, res: CircleResult) -> bool:
 def search_critical(
     section: Section, case: LoadCase, grid: SearchGrid
 ) -> CaseResult:
-    """格子探索により最小安全率のすべり円を求める。"""
+    """最小安全率のすべり面を求める。
+
+    method="spencer" のケースは円中心探索を行わず、指定された
+    非円弧すべり面をスペンサー法で照査する。
+    """
+    if case.method == "spencer":
+        from .spencer import analyze_spencer
+
+        if not case.slip_surface:
+            return CaseResult(case=case, critical=None, evaluated=0)
+        res = analyze_spencer(section, case.slip_surface, case, grid.n_slices)
+        return CaseResult(case=case, critical=res, evaluated=1 if res else 0)
+
     g = _auto_grid(section, grid)
     best: Optional[CircleResult] = None
     count = 0

@@ -14,6 +14,13 @@ from .sensitivity import SensitivityResult
 from .stability import CircleResult
 
 
+_METHOD_LABELS = {
+    "fellenius": "修正フェレニウス法",
+    "bishop": "簡易ビショップ法",
+    "spencer": "スペンサー法（非円弧すべり面）",
+}
+
+
 def _min_fl(cr: Optional[CircleResult]) -> Optional[float]:
     """臨界円のスライスのうち液状化判定対象の最小 FL。"""
     if cr is None:
@@ -77,7 +84,7 @@ def text_report(
     for r in results:
         lines.append("-" * 60)
         c = r.case
-        method = "修正フェレニウス法" if c.method == "fellenius" else "簡易ビショップ法"
+        method = _METHOD_LABELS.get(c.method, c.method)
         lines.append(f"  ケース   : {c.name}")
         lines.append(f"  解析法   : {method}")
         lines.append(f"  水平震度 : kh = {c.kh:.3f}")
@@ -92,16 +99,28 @@ def text_report(
             lines.append(f"  液状化   : FL 法で考慮（{fl_txt}）")
         lines.append(f"  必要安全率: Fsa = {c.allowable_fs:.2f}")
         if r.critical is None:
-            lines.append("  結果     : 有効なすべり円が見つかりませんでした")
+            if c.method == "spencer":
+                lines.append("  結果     : すべり面を指定するか、平衡解が得られませんでした")
+            else:
+                lines.append("  結果     : 有効なすべり円が見つかりませんでした")
             continue
         cr = r.critical
-        lines.append(
-            f"  臨界円   : 中心(x={cr.xc:.2f}, y={cr.yc:.2f}), R={cr.r:.2f} m"
-        )
+        if cr.surface is not None:
+            xs = [p.x for p in cr.surface]
+            th = f"{math.degrees(cr.theta):.1f}°" if cr.theta is not None else "—"
+            lines.append(
+                f"  すべり面 : 非円弧（折れ線 {len(cr.surface)}点, x={min(xs):.2f}〜{max(xs):.2f}）"
+            )
+            lines.append(f"  層間力傾角: θ = {th}")
+        else:
+            lines.append(
+                f"  臨界円   : 中心(x={cr.xc:.2f}, y={cr.yc:.2f}), R={cr.r:.2f} m"
+            )
         lines.append(f"  最小安全率: Fs = {cr.fs:.3f}")
         mark = "○ OK" if r.ok else "× NG"
         lines.append(f"  判定     : Fs={cr.fs:.3f} {'>=' if r.ok else '<'} Fsa={c.allowable_fs:.2f}  → {mark}")
-        lines.append(f"  （評価円数: {r.evaluated}）")
+        if cr.surface is None:
+            lines.append(f"  （評価円数: {r.evaluated}）")
 
     if newmark:
         lines.append("\n【ニューマーク法（滑動変位量）】")
@@ -315,7 +334,7 @@ def html_report(
     )
     for r in results:
         c = r.case
-        method = "修正フェレニウス法" if c.method == "fellenius" else "簡易ビショップ法"
+        method = _METHOD_LABELS.get(c.method, c.method)
         fs = f"{r.critical.fs:.3f}" if r.critical else "—"
         cls = "ok" if r.ok else "ng"
         badge = "OK" if r.ok else "NG"
@@ -327,7 +346,7 @@ def html_report(
     parts.append("</table>")
 
     # 各ケース図
-    parts.append("<h2>臨界すべり円</h2>")
+    parts.append("<h2>臨界すべり面</h2>")
     for r, svg in zip(results, svgs):
         c = r.case
         parts.append(f"<h3>{html.escape(c.name)}</h3>")
@@ -340,10 +359,17 @@ def html_report(
                     extra = f"　最小 FL={mfl:.3f}（液状化考慮）"
                 else:
                     extra = "　液状化: 判定対象なし"
-            parts.append(
-                f"<p class='cinfo'>中心 (x={cr.xc:.2f}, y={cr.yc:.2f})　"
-                f"半径 R={cr.r:.2f} m　最小安全率 Fs={cr.fs:.3f}{extra}</p>"
-            )
+            if cr.surface is not None:
+                th = f"{math.degrees(cr.theta):.1f}°" if cr.theta is not None else "—"
+                parts.append(
+                    f"<p class='cinfo'>非円弧すべり面（スペンサー法）　"
+                    f"層間力傾角 θ={th}　最小安全率 Fs={cr.fs:.3f}{extra}</p>"
+                )
+            else:
+                parts.append(
+                    f"<p class='cinfo'>中心 (x={cr.xc:.2f}, y={cr.yc:.2f})　"
+                    f"半径 R={cr.r:.2f} m　最小安全率 Fs={cr.fs:.3f}{extra}</p>"
+                )
         parts.append(svg)
 
     # ニューマーク法
@@ -566,7 +592,34 @@ def _svg_for_case(
         )
 
     cr: Optional[CircleResult] = result.critical if result is not None else None
-    if cr is not None:
+    if cr is not None and cr.surface is not None:
+        # 非円弧すべり面（スペンサー法）
+        from .geometry import surface_y as _surf_ncs
+
+        surf_pts = " ".join(f"{sx(p.x):.1f},{sy(p.y):.1f}" for p in cr.surface)
+        elems.append(
+            f"<polyline points='{surf_pts}' fill='none' "
+            f"stroke='#c0392b' stroke-width='2.5'/>"
+        )
+        # スライス境界（薄線）
+        for s in cr.slices[:: max(1, len(cr.slices) // 24)]:
+            if s.y_base is None:
+                continue
+            ysf = _surf_ncs(section, s.x_mid)
+            if ysf is not None:
+                elems.append(
+                    f"<line x1='{sx(s.x_mid):.1f}' y1='{sy(ysf):.1f}' "
+                    f"x2='{sx(s.x_mid):.1f}' y2='{sy(s.y_base):.1f}' "
+                    f"stroke='#c0392b' stroke-width='0.4' opacity='0.5'/>"
+                )
+        # Fs ラベル（すべり面中央上に配置）
+        mid = cr.surface[len(cr.surface) // 2]
+        color = "#1a7f37" if result.ok else "#c0392b"
+        elems.append(
+            f"<text x='{sx(mid.x):.1f}' y='{sy(mid.y)-8:.1f}' class='fslbl' "
+            f"fill='{color}'>Fs={cr.fs:.3f} ({result.judgement})</text>"
+        )
+    elif cr is not None:
         cx, cy, r = sx(cr.xc), sy(cr.yc), cr.r
         rpx = r * (sx(cr.xc + 1) - sx(cr.xc))  # 半径のピクセル換算
         # すべり円弧（土塊部分のみ）
