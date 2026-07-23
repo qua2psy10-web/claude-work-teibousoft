@@ -263,11 +263,11 @@
   }
 
   /* ---------- 帳票（印刷用計算書） ---------- */
-  #printDoc {
+  #printDoc, #batchDoc {
     display: none; position: fixed; inset: 0; z-index: 50; overflow-y: auto;
     background: var(--bg);
   }
-  #printDoc.open { display: block; }
+  #printDoc.open, #batchDoc.open { display: block; }
   .print-toolbar {
     position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; align-items: center;
     padding: 10px 22px; background: var(--panel); border-bottom: 1px solid var(--line-strong);
@@ -305,11 +305,31 @@
   .print-fig svg { width: 100%; height: auto; display: block; }
   .pagebreak { break-before: page; }
 
+  /* 縦断グラフの系列色（dataviz 検証済みパレット） */
+  :root {
+    --s0: #2f6fa8; --s1: #a05510; --s2: #7b3fbf; --s3: #0f8a55;
+  }
+  :root[data-theme="dark"] {
+    --s0: #4a90c9; --s1: #c9821f; --s2: #9c6ad4; --s3: #1fa568;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --s0: #4a90c9; --s1: #c9821f; --s2: #9c6ad4; --s3: #1fa568;
+    }
+  }
+  .batch-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 4px 0 12px; font-size: 0.78rem; }
+  .batch-legend .item { display: flex; align-items: center; gap: 6px; }
+  .batch-legend .swatch { width: 22px; height: 3px; border-radius: 2px; display: inline-block; }
+  .batch-drop {
+    text-align: center; color: var(--ink-dim); font-size: 0.85rem;
+    padding: 40px 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius);
+  }
+
   @media print {
     body { height: auto; overflow: visible; background: #fff; }
     header, main { display: none !important; }
-    #printDoc { position: static; overflow: visible; background: #fff; }
-    #printDoc:not(.open) { display: none; }
+    #printDoc, #batchDoc { position: static; overflow: visible; background: #fff; }
+    #printDoc:not(.open), #batchDoc:not(.open) { display: none; }
     .print-toolbar { display: none; }
     .print-page { border: none; max-width: none; margin: 0; padding: 0 6mm; }
   }
@@ -329,9 +349,11 @@
     <label class="chk"><input type="checkbox" id="darkToggle"> ダーク</label>
     <button class="ghost" id="btnLoad">JSON読込</button>
     <button class="ghost" id="btnSave">JSON保存</button>
+    <button class="ghost" id="btnBatch" title="複数断面のJSONをまとめて照査し、縦断方向のFs一覧を表示">一括処理</button>
     <button class="ghost" id="btnPrint" disabled title="照査実行後に利用できます">帳票</button>
     <button class="primary" id="btnRun">照査実行</button>
     <input type="file" id="fileInput" accept=".json" style="display:none">
+    <input type="file" id="batchInput" accept=".json" multiple style="display:none">
   </div>
 </header>
 
@@ -380,6 +402,18 @@
     <button id="btnClosePrint">閉じる</button>
   </div>
   <div class="print-page" id="printPage"></div>
+</div>
+
+<div id="batchDoc">
+  <div class="print-toolbar">
+    <strong style="font-size:0.9rem">複数断面の一括照査（縦断）</strong>
+    <span class="note">距離標ごとの断面をまとめて照査し、縦断方向のFsを一覧・グラフ表示します。</span>
+    <span class="spacer"></span>
+    <button id="btnBatchPrint">印刷 / PDF保存</button>
+    <button id="btnBatchCsv">CSV保存</button>
+    <button id="btnCloseBatch">閉じる</button>
+  </div>
+  <div class="print-page" id="batchPage"></div>
 </div>
 
 <script>
@@ -2134,6 +2168,266 @@ $('btnSave').addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(a.href);
 });
+/* =========================================================================
+   複数断面の一括処理（縦断方向のFs照査）
+   ========================================================================= */
+const SERIES_VARS = ['--s0', '--s1', '--s2', '--s3'];
+let lastBatch = null;
+
+function baseName(fname) {
+  const b = (fname || '').replace(/\.[^./\\]+$/, '');
+  const parts = b.split(/[\\/]/);
+  return parts[parts.length - 1] || fname || '断面';
+}
+
+// inputs: [{name, data}] を照査して縦断エントリの配列にする
+function runBatchEntries(inputs) {
+  const entries = inputs.map(inp => {
+    const data = inp.data || {};
+    const section = resolveSection(data.section);
+    const cases = data.cases || [];
+    const grid = data.grid || {};
+    const warnings = validateInput(section, cases);
+    const results = runAll(section, cases, grid);
+    const station = data.station || baseName(inp.name);
+    const distance = (data.distance === null || data.distance === undefined || data.distance === '')
+      ? null : Number(data.distance);
+    return { name: inp.name, station, distance, section, cases, results, warnings };
+  });
+  // 全断面に distance があれば距離順にソート
+  if (entries.length && entries.every(e => e.distance != null && isFinite(e.distance))) {
+    entries.sort((a, b) => a.distance - b.distance);
+  }
+  return entries;
+}
+
+// ケース名の一覧（最初に出現した順）
+function batchCaseNames(entries) {
+  const seen = [];
+  for (const e of entries) for (const c of e.cases) {
+    if (!seen.includes(c.name)) seen.push(c.name);
+  }
+  return seen;
+}
+
+// エントリ内の指定ケース名の結果を返す
+function batchResultFor(entry, caseName) {
+  const idx = entry.cases.findIndex(c => c.name === caseName);
+  return idx >= 0 ? entry.results[idx] : null;
+}
+
+function niceFloor(v) { return Math.floor(v * 2) / 2; }
+function niceCeil(v) { return Math.ceil(v * 2) / 2; }
+
+// 縦断グラフ（Fs vs 距離標）SVG文字列
+function batchProfileChart(entries, caseNames) {
+  const W = 820, H = 340, mL = 52, mR = 16, mT = 18, mB = 54;
+  const plotW = W - mL - mR, plotH = H - mT - mB;
+  const useDist = entries.every(e => e.distance != null && isFinite(e.distance));
+  const xvals = entries.map((e, i) => useDist ? e.distance : i);
+  let xmin = Math.min(...xvals), xmax = Math.max(...xvals);
+  if (xmax === xmin) { xmin -= 1; xmax += 1; }
+  // Fs と Fsa の値域から y スケールを決める
+  const allVals = [];
+  for (const e of entries) for (const cn of caseNames) {
+    const r = batchResultFor(e, cn);
+    if (r && r.critical) allVals.push(r.critical.fs);
+    if (r) allVals.push(r.case.allowable_fs);
+  }
+  if (!allVals.length) allVals.push(0, 1.5);
+  let ylo = Math.max(0, niceFloor(Math.min(...allVals) - 0.15));
+  let yhi = niceCeil(Math.max(...allVals) + 0.15);
+  if (yhi - ylo < 0.5) yhi = ylo + 0.5;
+  const px = v => mL + (v - xmin) / (xmax - xmin) * plotW;
+  const py = v => mT + (yhi - v) / (yhi - ylo) * plotH;
+
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums">`;
+  // y グリッド・目盛
+  for (let y = ylo; y <= yhi + 1e-9; y += 0.5) {
+    const yp = py(y).toFixed(1);
+    s += `<line x1="${mL}" y1="${yp}" x2="${W - mR}" y2="${yp}" stroke="var(--line)" stroke-width="1"/>`;
+    s += `<text x="${mL - 6}" y="${(py(y) + 3).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--ink-dim)">${y.toFixed(1)}</text>`;
+  }
+  // x 軸
+  s += `<line x1="${mL}" y1="${py(ylo).toFixed(1)}" x2="${W - mR}" y2="${py(ylo).toFixed(1)}" stroke="var(--line-strong)" stroke-width="1"/>`;
+  // x 目盛（各断面の位置に距離標ラベル）
+  entries.forEach((e, i) => {
+    const xp = px(xvals[i]);
+    s += `<line x1="${xp.toFixed(1)}" y1="${py(ylo).toFixed(1)}" x2="${xp.toFixed(1)}" y2="${(py(ylo) + 4).toFixed(1)}" stroke="var(--line-strong)" stroke-width="1"/>`;
+    const lbl = useDist ? `${e.station}` : e.station;
+    s += `<text x="${xp.toFixed(1)}" y="${(H - mB + 18).toFixed(1)}" text-anchor="middle" font-size="10" fill="var(--ink-dim)">${escapeHtml(String(lbl))}</text>`;
+  });
+  s += `<text x="${(mL + plotW / 2).toFixed(1)}" y="${(H - 6).toFixed(1)}" text-anchor="middle" font-size="11" fill="var(--ink-dim)">${useDist ? '距離標（累積距離 m の順）' : '断面（入力順）'}</text>`;
+  s += `<text x="14" y="${(mT + plotH / 2).toFixed(1)}" text-anchor="middle" font-size="11" fill="var(--ink-dim)" transform="rotate(-90 14 ${(mT + plotH / 2).toFixed(1)})">安全率 Fs</text>`;
+
+  // ケースごとに折れ線・許容値・マーカー
+  caseNames.forEach((cn, ci) => {
+    const col = `var(${SERIES_VARS[ci % SERIES_VARS.length]})`;
+    // 許容安全率（破線）— そのケースの最初の許容値を採用
+    let fsa = null;
+    for (const e of entries) { const r = batchResultFor(e, cn); if (r) { fsa = r.case.allowable_fs; break; } }
+    if (fsa != null) {
+      const yp = py(fsa).toFixed(1);
+      s += `<line x1="${mL}" y1="${yp}" x2="${W - mR}" y2="${yp}" stroke="${col}" stroke-width="1" stroke-dasharray="5 4" opacity="0.55"/>`;
+      s += `<text x="${W - mR - 2}" y="${(py(fsa) - 3).toFixed(1)}" text-anchor="end" font-size="9.5" fill="${col}">${escapeHtml(cn)} Fsa=${fsa}</text>`;
+    }
+    // 折れ線
+    const pts = [];
+    entries.forEach((e, i) => {
+      const r = batchResultFor(e, cn);
+      if (r && r.critical) pts.push(`${px(xvals[i]).toFixed(1)},${py(r.critical.fs).toFixed(1)}`);
+    });
+    if (pts.length >= 2) s += `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="2"/>`;
+    // マーカー
+    entries.forEach((e, i) => {
+      const r = batchResultFor(e, cn);
+      if (!r || !r.critical) return;
+      const ok = r.critical.fs >= r.case.allowable_fs;
+      const cx = px(xvals[i]).toFixed(1), cy = py(r.critical.fs).toFixed(1);
+      const fill = ok ? col : 'var(--danger)';
+      s += `<circle cx="${cx}" cy="${cy}" r="3.6" fill="${fill}" stroke="var(--panel)" stroke-width="1">` +
+        `<title>${escapeHtml(e.station)} / ${escapeHtml(cn)}: Fs=${r.critical.fs.toFixed(3)}（${ok ? 'OK' : 'NG'}）</title></circle>`;
+    });
+  });
+  s += `</svg>`;
+  return s;
+}
+
+function batchLegendHtml(caseNames) {
+  return `<div class="batch-legend">` + caseNames.map((cn, ci) =>
+    `<span class="item"><span class="swatch" style="background:var(${SERIES_VARS[ci % SERIES_VARS.length]})"></span>${escapeHtml(cn)}</span>`
+  ).join('') + `</div>`;
+}
+
+// 縦断一覧表
+function batchSummaryTableHtml(entries, caseNames) {
+  const useDist = entries.every(e => e.distance != null && isFinite(e.distance));
+  const head = `<tr><th>距離標</th>${useDist ? '<th>距離 (m)</th>' : ''}` +
+    caseNames.map(cn => `<th>${escapeHtml(cn)} Fs</th><th>判定</th>`).join('') + `</tr>`;
+  const rows = entries.map(e => {
+    const cells = caseNames.map(cn => {
+      const r = batchResultFor(e, cn);
+      if (!r || !r.critical) return `<td>—</td><td>—</td>`;
+      const ok = r.critical.fs >= r.case.allowable_fs;
+      return `<td>${r.critical.fs.toFixed(3)}</td><td class="${ok ? 'ok' : 'ng'}">${ok ? 'OK' : 'NG'}</td>`;
+    }).join('');
+    const dcell = useDist ? `<td>${e.distance}</td>` : '';
+    return `<tr><td class="l">${escapeHtml(e.station)}</td>${dcell}${cells}</tr>`;
+  }).join('');
+  // 最小値の行
+  const minCells = caseNames.map(cn => {
+    let best = null, at = '';
+    for (const e of entries) {
+      const r = batchResultFor(e, cn);
+      if (r && r.critical && (best == null || r.critical.fs < best)) { best = r.critical.fs; at = e.station; }
+    }
+    if (best == null) return `<td>—</td><td>—</td>`;
+    return `<td>${best.toFixed(3)}</td><td>@${escapeHtml(at)}</td>`;
+  }).join('');
+  const minRow = `<tr class="sum"><td class="l">最小</td>${useDist ? '<td>—</td>' : ''}${minCells}</tr>`;
+  return `<table class="rep">${head}${rows}${minRow}</table>`;
+}
+
+function batchCsv(entries, caseNames) {
+  const useDist = entries.every(e => e.distance != null && isFinite(e.distance));
+  const header = ['station'].concat(useDist ? ['distance'] : [])
+    .concat(caseNames.flatMap(cn => [`${cn}_Fs`, `${cn}_判定`]));
+  const lines = [header.join(',')];
+  for (const e of entries) {
+    const row = [e.station].concat(useDist ? [e.distance] : []);
+    for (const cn of caseNames) {
+      const r = batchResultFor(e, cn);
+      if (r && r.critical) { row.push(r.critical.fs.toFixed(3)); row.push(r.critical.fs >= r.case.allowable_fs ? 'OK' : 'NG'); }
+      else { row.push(''); row.push(''); }
+    }
+    lines.push(row.join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+function buildBatchDoc(entries) {
+  const page = $('batchPage');
+  if (!entries.length) {
+    page.innerHTML = `<div class="batch-drop">JSONファイルが選択されませんでした。</div>`;
+    return;
+  }
+  const caseNames = batchCaseNames(entries);
+  const ngList = [];
+  for (const e of entries) for (const cn of caseNames) {
+    const r = batchResultFor(e, cn);
+    if (r && r.critical && r.critical.fs < r.case.allowable_fs) ngList.push(`${e.station}（${cn}）`);
+  }
+  const warnCount = entries.reduce((a, e) => a + e.warnings.length, 0);
+  const meta = [`断面数 ${entries.length}`, `ケース ${caseNames.join(' / ')}`,
+    ngList.length ? `NG ${ngList.length}件` : '全断面OK',
+    warnCount ? `入力診断の警告 ${warnCount}件` : '警告なし'];
+
+  let html = `<h1>複数断面の一括照査（縦断方向）</h1>`;
+  html += `<div class="doc-meta">${meta.map(m => `<span>${escapeHtml(m)}</span>`).join('')}</div>`;
+  html += `<h2>縦断方向の最小安全率</h2>`;
+  html += batchLegendHtml(caseNames);
+  html += `<div class="print-fig">${batchProfileChart(entries, caseNames)}</div>`;
+  html += `<h2>照査一覧</h2>`;
+  html += batchSummaryTableHtml(entries, caseNames);
+  if (ngList.length) {
+    html += `<p class="rep-note"><b>NGの断面・ケース:</b> ${ngList.map(escapeHtml).join('、')}</p>`;
+  }
+  // 断面別の警告
+  const withWarn = entries.filter(e => e.warnings.length);
+  if (withWarn.length) {
+    html += `<h2>断面別の入力診断</h2>`;
+    for (const e of withWarn) {
+      html += `<h3>${escapeHtml(e.station)}</h3><ul class="rep-note" style="margin-top:0">` +
+        e.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('') + `</ul>`;
+    }
+  }
+  html += `<p class="rep-note">入出力はteibo CLIと同じJSON形式です。同じ照査は ` +
+    `<code>python -m teibo batch 断面*.json --html 縦断.html</code> でも実行できます。</p>`;
+  page.innerHTML = html;
+}
+
+$('btnBatch').addEventListener('click', () => $('batchInput').click());
+$('batchInput').addEventListener('change', ev => {
+  const files = Array.from(ev.target.files || []);
+  ev.target.value = ''; // 同じファイルを続けて選べるように
+  if (!files.length) return;
+  Promise.all(files.map(f => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve({ name: f.name, text: r.result });
+    r.onerror = () => reject(new Error(f.name));
+    r.readAsText(f);
+  }))).then(loaded => {
+    const inputs = [];
+    for (const l of loaded) {
+      let data;
+      try { data = JSON.parse(l.text); }
+      catch (e) { setStatus(`${l.name} が JSON として解釈できません`, true); return; }
+      inputs.push({ name: l.name, data });
+    }
+    try {
+      const entries = runBatchEntries(inputs);
+      lastBatch = entries;
+      buildBatchDoc(entries);
+      $('batchDoc').classList.add('open');
+      setStatus(`一括照査 完了（${entries.length}断面）`, false);
+    } catch (e) {
+      setStatus('一括処理エラー: ' + e.message, true);
+    }
+  }).catch(e => setStatus('ファイル読込エラー: ' + e.message, true));
+});
+$('btnCloseBatch').addEventListener('click', () => $('batchDoc').classList.remove('open'));
+$('btnBatchPrint').addEventListener('click', () => window.print());
+$('btnBatchCsv').addEventListener('click', () => {
+  if (!lastBatch || !lastBatch.length) return;
+  const csv = batchCsv(lastBatch, batchCaseNames(lastBatch));
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'teibo_batch.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 $('darkToggle').addEventListener('change', ev => {
   document.documentElement.setAttribute('data-theme', ev.target.checked ? 'dark' : 'light');
 });

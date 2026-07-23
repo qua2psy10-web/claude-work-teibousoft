@@ -44,7 +44,7 @@ from .sensitivity import SensitivityResult, run_sensitivity
 from .stability import CircleResult, Slice, SlipSurface, analyze_circle
 from .report import html_report, sensitivity_text_report, text_report
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "AnalysisInput",
