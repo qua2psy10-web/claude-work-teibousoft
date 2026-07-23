@@ -106,6 +106,9 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
         )
         section.phreatic_estimated = True
 
+    # 入力全体の非円弧すべり面（スペンサー法の既定値）
+    input_slip = _points(data["slip_surface"]) if data.get("slip_surface") else None
+
     cases: List[LoadCase] = []
     for c in data.get("cases", []):
         case_phreatic = None
@@ -115,12 +118,17 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
         case_ext = None
         if "external_water" in c:
             case_ext = _points(c["external_water"]) if c["external_water"] else []
+        method = c.get("method", "fellenius")
+        # slip_surface: ケース指定 → それを使う / 未指定かつ spencer → 入力全体の値
+        case_slip = _points(c["slip_surface"]) if c.get("slip_surface") else None
+        if case_slip is None and str(method).lower() == "spencer":
+            case_slip = input_slip
         cases.append(
             LoadCase(
                 name=c.get("name", "ケース"),
                 kh=float(c.get("kh", 0.0)),
                 allowable_fs=float(c.get("allowable_fs", 1.2)),
-                method=c.get("method", "fellenius"),
+                method=method,
                 phreatic=case_phreatic,
                 external_water=case_ext,
                 consider_liquefaction=bool(c.get("consider_liquefaction", False)),
@@ -128,6 +136,7 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
                 allowable_displacement=float(
                     c.get("allowable_displacement", 0.5)
                 ),
+                slip_surface=case_slip,
             )
         )
     if not cases:
@@ -222,6 +231,7 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
         sensitivity=sensitivity,
         accel_series=accel_series,
         countermeasures=countermeasures,
+        slip_surface=input_slip,
         station=data.get("station"),
         distance=(
             float(data["distance"]) if data.get("distance") is not None else None

@@ -193,7 +193,8 @@ class LoadCase:
         name:        ケース名（例: 常時、地震時）。
         kh:          設計水平震度。常時は 0。
         allowable_fs: 必要安全率 Fsa。
-        method:      "fellenius"（修正フェレニウス法）または "bishop"（簡易ビショップ法）。
+        method:      "fellenius"（修正フェレニウス法）／"bishop"（簡易ビショップ法）／
+                     "spencer"（スペンサー法・非円弧すべり面）。
         phreatic:    ケース専用の浸潤線（水位急降下時の残留間隙水圧など）。
                      None なら断面の浸潤線をそのまま用いる。
         external_water: ケース専用の外水位。None なら断面の設定を継承、
@@ -203,6 +204,8 @@ class LoadCase:
         newmark:     True の場合、臨界円に対して降伏震度 ky と
                      ニューマーク法による滑動変位量を算定する。
         allowable_displacement: ニューマーク法の許容変位量 Da (m)。
+        slip_surface: スペンサー法で照査する非円弧すべり面（左→右の折れ線）。
+                     method="spencer" のときに用いる。円中心探索は行わない。
     """
 
     name: str
@@ -214,12 +217,19 @@ class LoadCase:
     consider_liquefaction: bool = False
     newmark: bool = False
     allowable_displacement: float = 0.5
+    slip_surface: Optional[List[Point]] = None
 
     def __post_init__(self) -> None:
         m = self.method.lower()
-        if m not in ("fellenius", "bishop"):
+        if m not in ("fellenius", "bishop", "spencer"):
             raise ValueError(f"未知の解析法: {self.method}")
         self.method = m
+        if m == "spencer" and self.slip_surface is not None:
+            if len(self.slip_surface) < 2:
+                raise ValueError("スペンサー法: slip_surface は2点以上必要です")
+            xs = [p.x for p in self.slip_surface]
+            if any(b < a for a, b in zip(xs, xs[1:])):
+                raise ValueError("スペンサー法: slip_surface の x は昇順である必要があります")
 
 
 @dataclass
@@ -289,6 +299,9 @@ class AnalysisInput:
     accel_series: Optional[List[Point]] = None
     # 対策工の案（countermeasure.Countermeasure のリスト。循環回避のため型は緩く保持）
     countermeasures: List[object] = field(default_factory=list)
+    # スペンサー法で照査する非円弧すべり面（入力全体の既定値）。
+    # method="spencer" のケースで case.slip_surface 未指定時にこれを用いる。
+    slip_surface: Optional[List[Point]] = None
     # 一括処理用: 距離標（例 "0k200"）と縦断方向の累積距離 (m)
     station: Optional[str] = None
     distance: Optional[float] = None

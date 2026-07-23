@@ -40,11 +40,12 @@ from .model import ImprovementZone
 from .newmark import NewmarkResult, run_newmark
 from .search import CaseResult, run_all, search_critical, section_for_case
 from .seepage import estimate_phreatic
+from .spencer import analyze_spencer, solve_spencer
 from .sensitivity import SensitivityResult, run_sensitivity
 from .stability import CircleResult, Slice, SlipSurface, analyze_circle
 from .report import html_report, sensitivity_text_report, text_report
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [
     "AnalysisInput",
@@ -76,6 +77,8 @@ __all__ = [
     "search_critical",
     "section_for_case",
     "estimate_phreatic",
+    "analyze_spencer",
+    "solve_spencer",
     "SensitivityResult",
     "run_sensitivity",
     "CircleResult",

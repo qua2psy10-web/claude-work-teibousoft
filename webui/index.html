@@ -422,6 +422,11 @@
    定数・ユーティリティ
    ========================================================================= */
 const GAMMA_W = 9.81;
+const METHOD_LABELS = {
+  fellenius: '修正フェレニウス法',
+  bishop: '簡易ビショップ法',
+  spencer: 'スペンサー法（非円弧すべり面）',
+};
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function fmt(n, d) { return (n == null || !isFinite(n)) ? '—' : n.toFixed(d == null ? 3 : d); }
@@ -729,6 +734,170 @@ function analyzeCircle(section, caseObj, xc, yc, r, n) {
 }
 
 /* =========================================================================
+   スペンサー法（非円弧すべり面）
+   ========================================================================= */
+function surfaceAt(surface, x) {
+  for (let i = 0; i < surface.length - 1; i++) {
+    const ax = surface[i][0], ay = surface[i][1], bx = surface[i + 1][0], by = surface[i + 1][1];
+    if (ax <= x && x <= bx && bx > ax) {
+      const t = (x - ax) / (bx - ax);
+      return { y: ay + t * (by - ay), alpha: Math.atan2(by - ay, bx - ax) };
+    }
+  }
+  return null;
+}
+
+function buildPolySlices(section, surface, n, caseObj) {
+  const kh = caseObj ? caseObj.kh : 0;
+  const xLeft = surface[0][0], xRight = surface[surface.length - 1][0];
+  const totalW = xRight - xLeft;
+  if (totalW <= 0) return null;
+  const slices = [];
+  for (let i = 0; i < surface.length - 1; i++) {
+    const ax = surface[i][0], bx = surface[i + 1][0];
+    const segW = bx - ax;
+    if (segW <= 1e-9) continue;
+    const m = Math.max(1, Math.round(n * segW / totalW));
+    const sw = segW / m;
+    for (let k = 0; k < m; k++) {
+      const xm = ax + sw * (k + 0.5);
+      const sa = surfaceAt(surface, xm);
+      const ys = surfaceY(section, xm);
+      if (!sa || ys == null) continue;
+      const yb = sa.y, alpha = sa.alpha;
+      const h = ys - yb;
+      if (h <= 1e-9) continue;
+      let w = columnWeight(section, xm, yb, ys) * sw;
+      const x0 = xm - sw / 2, x1 = xm + sw / 2;
+      for (const sc of (section.surcharges || [])) {
+        const ov = Math.min(x1, sc.x_end) - Math.max(x0, sc.x_start);
+        if (ov > 0) w += sc.q * ov;
+      }
+      w += waterOverburden(section, xm) * sw;
+      const cosA = Math.cos(alpha);
+      const baseLen = Math.abs(cosA) > 1e-9 ? sw / cosA : sw;
+      let u = porePressure(section, xm, yb);
+      const layer = soilAt(section, xm, yb);
+      const zone = improvementAt(section, xm, yb);
+      let c, phi;
+      if (zone) { c = zone.c; phi = zone.phi * Math.PI / 180; }
+      else { c = layer ? layer.c : 0; phi = layer ? layer.phi * Math.PI / 180 : 0; }
+      let fl = null;
+      if (!zone && caseObj && caseObj.consider_liquefaction && layer && layer.liquefaction && u > 0) {
+        const sigmaV = columnWeight(section, xm, yb, ys) + waterOverburden(section, xm);
+        const sigmaVEff = Math.max(sigmaV - u, 1e-6);
+        fl = flValue(layer.liquefaction.n_value, layer.liquefaction.fines_content || 0, sigmaV, sigmaVEff, kh, h);
+        const ru = ruFromFl(fl);
+        if (ru > 0) u = Math.min(u + ru * sigmaVEff, sigmaV);
+      }
+      slices.push({ xMid: xm, width: sw, height: h, weight: w, alpha, baseLen, u, c, phi, fl, yBase: yb });
+    }
+  }
+  if (slices.length < 2) return null;
+  if (slices.reduce((s, sl) => s + sl.weight * Math.sin(sl.alpha), 0) < 0) {
+    for (const sl of slices) { sl.alpha = -sl.alpha; sl.xMid = -sl.xMid; }
+  }
+  return slices;
+}
+
+function spencerQ(slices, fs, theta, kh) {
+  const out = [];
+  for (const s of slices) {
+    const a = s.alpha, t = Math.tan(s.phi), w = s.weight;
+    const nEff = w * Math.cos(a) - kh * w * Math.sin(a) - s.u * s.baseLen;
+    const resist = (s.c * s.baseLen + nEff * t) / fs;
+    const drive = w * Math.sin(a) + kh * w * Math.cos(a);
+    const den = Math.cos(a - theta) + (t / fs) * Math.sin(a - theta);
+    if (den <= 1e-6) return null;
+    out.push((resist - drive) / den);
+  }
+  return out;
+}
+function spencerForceResidual(slices, fs, theta, kh) {
+  const q = spencerQ(slices, fs, theta, kh);
+  return q == null ? null : q.reduce((a, b) => a + b, 0);
+}
+function spencerMomentResidual(slices, fs, theta, kh) {
+  const q = spencerQ(slices, fs, theta, kh);
+  if (q == null) return null;
+  const st = Math.sin(theta), ct = Math.cos(theta);
+  let tot = 0;
+  for (let i = 0; i < q.length; i++) {
+    const yb = slices[i].yBase != null ? slices[i].yBase : 0;
+    tot += q[i] * (slices[i].xMid * st - yb * ct);
+  }
+  return tot;
+}
+function spencerForceFs(slices, theta, kh) {
+  const nGrid = 80, fsHi = 30, fsLo = 0.2;
+  let prev = null;
+  for (let i = 0; i <= nGrid; i++) {
+    const fs = fsHi - (fsHi - fsLo) * i / nGrid;
+    const r = spencerForceResidual(slices, fs, theta, kh);
+    if (r == null) { prev = null; continue; }
+    if (prev != null) {
+      const [pfs, pr] = prev;
+      if (pr < 0 && r >= 0) {
+        let lo = fs, hi = pfs;   // lo:残差>=0側 hi:残差<0側
+        for (let it = 0; it < 80; it++) {
+          const mid = 0.5 * (lo + hi);
+          const rm = spencerForceResidual(slices, mid, theta, kh);
+          if (rm == null) break;
+          if (Math.abs(rm) < 1e-10 || Math.abs(hi - lo) < 1e-9) return mid;
+          if (rm >= 0) lo = mid; else hi = mid;
+        }
+        return 0.5 * (lo + hi);
+      }
+    }
+    prev = [fs, r];
+  }
+  return null;
+}
+function solveSpencer(slices, kh) {
+  const hFn = theta => {
+    const f = spencerForceFs(slices, theta, kh);
+    if (f == null) return null;
+    const m = spencerMomentResidual(slices, f, theta, kh);
+    return m == null ? null : { m, f };
+  };
+  const nScan = 111, loDeg = -50, hiDeg = 60;
+  let prev = null;
+  for (let i = 0; i < nScan; i++) {
+    const th = (loDeg + (hiDeg - loDeg) * i / (nScan - 1)) * Math.PI / 180;
+    const hv = hFn(th);
+    if (hv == null) { prev = null; continue; }
+    if (prev != null) {
+      const [pth, pm] = prev;
+      if (pm * hv.m < 0) {
+        let lo = pth, hi = th, mlo = pm;
+        for (let it = 0; it < 80; it++) {
+          const mid = 0.5 * (lo + hi);
+          const hm = hFn(mid);
+          if (hm == null) break;
+          if (Math.abs(hi - lo) < 1e-9) return { fs: hm.f, theta: mid };
+          if (mlo * hm.m < 0) hi = mid; else { lo = mid; mlo = hm.m; }
+        }
+        const mid = 0.5 * (lo + hi);
+        const f = spencerForceFs(slices, mid, kh);
+        return f == null ? null : { fs: f, theta: mid };
+      }
+    }
+    prev = [th, hv.m];
+  }
+  const f0 = spencerForceFs(slices, 0, kh);
+  return f0 == null ? null : { fs: f0, theta: 0 };
+}
+function analyzeSpencer(section, surface, caseObj, n) {
+  if (!surface || surface.length < 2) return null;
+  const kh = caseObj ? caseObj.kh : 0;
+  const slices = buildPolySlices(section, surface, n || 40, caseObj);
+  if (!slices) return null;
+  const sol = solveSpencer(slices, kh);
+  if (!sol || sol.fs == null || sol.fs <= 0 || !isFinite(sol.fs)) return null;
+  return { xc: 0, yc: 0, r: 0, fs: sol.fs, slices, surface: surface.map(p => [p[0], p[1]]), theta: sol.theta };
+}
+
+/* =========================================================================
    臨界円探索
    ========================================================================= */
 function linspace(a, b, n) {
@@ -790,6 +959,13 @@ function refine(section, caseObj, seed, g, passes) {
 }
 
 function searchCritical(section, caseObj, grid) {
+  if (caseObj.method === 'spencer') {
+    if (!caseObj.slip_surface || caseObj.slip_surface.length < 2) {
+      return { case: caseObj, critical: null, evaluated: 0 };
+    }
+    const res = analyzeSpencer(section, caseObj.slip_surface, caseObj, (grid && grid.n_slices) || 40);
+    return { case: caseObj, critical: res, evaluated: res ? 1 : 0 };
+  }
   const g = autoGrid(section, grid);
   let best = null, count = 0;
   const xs = linspace(g.xc_min, g.xc_max, g.nx);
@@ -1262,7 +1438,28 @@ function buildCaseSvg(section, result, sx, sy, w, h) {
   }
 
   const cr = result && result.critical ? result.critical : null;
-  if (cr) {
+  if (cr && cr.surface) {
+    // 非円弧すべり面（スペンサー法）
+    const pts = cr.surface.map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(' ');
+    svg.appendChild(svgEl('polyline', { points: pts, fill: 'none', stroke: 'var(--danger)', 'stroke-width': 2.4 }));
+    const step = Math.max(1, Math.floor(cr.slices.length / 20));
+    for (let i = 0; i < cr.slices.length; i += step) {
+      const s = cr.slices[i];
+      if (s.yBase == null) continue;
+      const ysf = surfaceY(section, s.xMid);
+      if (ysf == null) continue;
+      svg.appendChild(svgEl('line', {
+        x1: sx(s.xMid), y1: sy(ysf), x2: sx(s.xMid), y2: sy(s.yBase),
+        stroke: 'var(--danger)', 'stroke-width': 0.4, opacity: 0.5
+      }));
+    }
+    const mid = cr.surface[Math.floor(cr.surface.length / 2)];
+    const okColor = cr.fs >= result.case.allowable_fs ? 'var(--ok)' : 'var(--danger)';
+    const judge = cr.fs >= result.case.allowable_fs ? 'OK' : 'NG';
+    const t = svgEl('text', { x: sx(mid[0]), y: sy(mid[1]) - 9, class: 'lbl fs', fill: okColor, 'text-anchor': 'middle' });
+    t.textContent = `Fs=${cr.fs.toFixed(3)} (${judge})`;
+    svg.appendChild(t);
+  } else if (cr) {
     const cx = sx(cr.xc), cy = sy(cr.yc);
     if (cr.slices.length) {
       const xl0 = cr.slices[0].xMid - cr.slices[0].width / 2;
@@ -1556,9 +1753,10 @@ function renderSheet() {
       el('td', null, el('input', { type: 'text', value: c.name || '', oninput: ev => { c.name = ev.target.value; syncFromForm(); } })),
       el('td', null, el('input', { type: 'number', step: 'any', value: c.kh ?? 0, oninput: ev => { c.kh = num(ev.target.value); syncFromForm(); } })),
       el('td', null, el('input', { type: 'number', step: 'any', value: c.allowable_fs ?? 1.2, oninput: ev => { c.allowable_fs = num(ev.target.value); syncFromForm(); } })),
-      el('td', null, el('select', { onchange: ev => { c.method = ev.target.value; syncFromForm(); } },
-        el('option', { value: 'fellenius', selected: c.method !== 'bishop' }, 'フェレニウス'),
-        el('option', { value: 'bishop', selected: c.method === 'bishop' }, 'ビショップ'))),
+      el('td', null, el('select', { onchange: ev => { c.method = ev.target.value; renderSheet(); syncFromForm(); } },
+        el('option', { value: 'fellenius', selected: c.method === 'fellenius' || (c.method !== 'bishop' && c.method !== 'spencer') }, 'フェレニウス'),
+        el('option', { value: 'bishop', selected: c.method === 'bishop' }, 'ビショップ'),
+        el('option', { value: 'spencer', selected: c.method === 'spencer' }, 'スペンサー(非円弧)'))),
       el('td', null, el('input', {
         type: 'checkbox', checked: !!c.consider_liquefaction, onchange: ev => {
           if (ev.target.checked) c.consider_liquefaction = true; else delete c.consider_liquefaction;
@@ -1587,6 +1785,22 @@ function renderSheet() {
   }, '＋ ケースを追加'));
   dCases.append(bodyC);
   sheet.append(dCases);
+
+  /* --- 非円弧すべり面（スペンサー法） --- */
+  const hasSpencer = state.cases.some(c => c.method === 'spencer');
+  if (hasSpencer) {
+    const dSlip = el('details', { class: 'card', open: '' }, el('summary', null, '非円弧すべり面（スペンサー法）'));
+    const bodyS = el('div', { class: 'card-body' });
+    bodyS.append(el('p', { class: 'hint' },
+      'すべり面を折れ線（左→右）で指定します。始端・終端は地表面上に、中間は地盤内に取ります。スペンサー法のケースで使用されます。'));
+    if (!state.slip_surface || state.slip_surface.length < 2) {
+      state.slip_surface = state.slip_surface && state.slip_surface.length
+        ? state.slip_surface : [[9, 4.5], [13, -2.2], [21, -2.2], [24, 0]];
+    }
+    bodyS.append(pointsTable(state.slip_surface, () => { renderSheet(); }));
+    dSlip.append(bodyS);
+    sheet.append(dSlip);
+  }
 
   /* --- 探索設定 --- */
   const dGrid = el('details', { class: 'card' }, el('summary', null, '探索設定（すべり円）'));
@@ -1785,6 +1999,12 @@ runBtn.addEventListener('click', async () => {
     const section = resolveSection(state.section);
     const cases = state.cases || [];
     const grid = state.grid || {};
+    // 入力全体の slip_surface を method=spencer のケースへ配る（ケース指定を優先）
+    for (const c of cases) {
+      if (c.method === 'spencer' && !c.slip_surface && state.slip_surface) {
+        c.slip_surface = state.slip_surface;
+      }
+    }
     const warnings = validateInput(section, cases);
     const results = runAll(section, cases, grid);
 
@@ -1825,7 +2045,7 @@ runBtn.addEventListener('click', async () => {
       const secC = sectionForCase(section, r.case);
       const block = document.createElement('div');
       block.className = 'case-block';
-      const method = r.case.method === 'bishop' ? '簡易ビショップ法' : '修正フェレニウス法';
+      const method = METHOD_LABELS[r.case.method] || r.case.method;
       const head = document.createElement('div');
       head.className = 'case-head';
       head.textContent = `${r.case.name}　(${method}, kh=${r.case.kh})`;
@@ -1837,10 +2057,15 @@ runBtn.addEventListener('click', async () => {
       block.append(hostDiv);
       const meta = document.createElement('div');
       meta.className = 'case-meta';
-      if (r.critical) {
+      if (r.critical && r.critical.surface) {
+        const th = r.critical.theta != null ? (r.critical.theta * 180 / Math.PI).toFixed(1) + '°' : '—';
+        meta.textContent = `非円弧すべり面（折れ線 ${r.critical.surface.length}点）　層間力傾角 θ=${th}`;
+      } else if (r.critical) {
         meta.textContent = `中心 (x=${r.critical.xc.toFixed(2)}, y=${r.critical.yc.toFixed(2)})　半径 R=${r.critical.r.toFixed(2)} m　評価円数 ${r.evaluated}`;
       } else {
-        meta.textContent = '有効なすべり円が見つかりませんでした。';
+        meta.textContent = r.case.method === 'spencer'
+          ? 'すべり面を指定するか、平衡解が得られませんでした。'
+          : '有効なすべり円が見つかりませんでした。';
       }
       block.append(meta);
       reportArea.append(block);
@@ -2054,7 +2279,7 @@ function buildPrintDoc(run) {
   html += `<h2>照査結果一覧</h2><table class="rep">
     <tr><th>ケース</th><th>解析法</th><th>kh</th><th>Fs</th><th>Fsa</th><th>判定</th></tr>`;
   for (const r of run.results) {
-    const method = r.case.method === 'bishop' ? '簡易ビショップ法' : '修正フェレニウス法';
+    const method = METHOD_LABELS[r.case.method] || r.case.method;
     const fs = r.critical ? r.critical.fs.toFixed(3) : '—';
     const ok = r.critical && r.critical.fs >= r.case.allowable_fs;
     html += `<tr><td class="l">${escapeHtml(r.case.name)}</td><td>${method}</td>` +
@@ -2070,11 +2295,15 @@ function buildPrintDoc(run) {
     const div = document.createElement('div');
     div.className = idx > 0 ? 'pagebreak' : '';
     let inner = `<h2>ケース: ${escapeHtml(r.case.name)}</h2>`;
-    if (r.critical) {
+    if (r.critical && r.critical.surface) {
+      const th = r.critical.theta != null ? (r.critical.theta * 180 / Math.PI).toFixed(1) + '°' : '—';
+      inner += `<p style="font-size:0.82rem" class="mono">非円弧すべり面（スペンサー法）　` +
+        `折れ線 ${r.critical.surface.length}点　層間力傾角 θ=${th}　Fs=${r.critical.fs.toFixed(3)}</p>`;
+    } else if (r.critical) {
       inner += `<p style="font-size:0.82rem" class="mono">臨界円 中心 (x=${r.critical.xc.toFixed(2)}, y=${r.critical.yc.toFixed(2)})　` +
         `R=${r.critical.r.toFixed(2)} m　Fs=${r.critical.fs.toFixed(3)}　評価円数 ${r.evaluated}</p>`;
     } else {
-      inner += '<p style="font-size:0.82rem">有効なすべり円が見つかりませんでした。</p>';
+      inner += '<p style="font-size:0.82rem">有効なすべり面が得られませんでした。</p>';
     }
     div.innerHTML = inner;
     if (r.critical) {

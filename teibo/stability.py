@@ -20,7 +20,7 @@ from .geometry import (
     surface_y,
     water_overburden,
 )
-from .model import GAMMA_W, LoadCase, Section
+from .model import GAMMA_W, LoadCase, Point, Section
 
 
 @dataclass
@@ -37,6 +37,7 @@ class Slice:
     c: float               # 粘着力 (kN/m2)
     phi: float             # 内部摩擦角 (rad)
     fl: Optional[float] = None  # 液状化抵抗率 FL（判定対象外は None）
+    y_base: Optional[float] = None  # 基面中点の標高 (m)。スペンサー法のモーメント計算で使用
 
 
 @dataclass
@@ -53,6 +54,10 @@ class CircleResult:
     crack_x: Optional[float] = None
     # クラック水圧などによる追加起動力（モーメント換算, kN/m）
     extra_driving: float = 0.0
+    # 非円弧すべり面（スペンサー法）の場合の折れ線。None なら円弧。
+    surface: Optional[List["Point"]] = None
+    # スペンサー法の層間力傾角 θ (rad)。
+    theta: Optional[float] = None
 
     def __lt__(self, other: "CircleResult") -> bool:
         return self.fs < other.fs
@@ -255,6 +260,7 @@ def build_slices(
                 c=c,
                 phi=phi,
                 fl=fl,
+                y_base=ya,
             )
         )
 
