@@ -261,6 +261,8 @@ class SearchGrid:
     # すべり終端 xr（右側交点）の許容範囲
     x_exit_min: Optional[float] = None
     x_exit_max: Optional[float] = None
+    # 非円弧すべり面の自動探索（スペンサー法）の中間ノード数
+    nc_nodes: int = 6
 
 
 @dataclass

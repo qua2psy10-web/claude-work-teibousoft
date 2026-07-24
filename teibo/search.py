@@ -106,11 +106,16 @@ def search_critical(
     非円弧すべり面をスペンサー法で照査する。
     """
     if case.method == "spencer":
-        from .spencer import analyze_spencer
+        if case.slip_surface:
+            # すべり面が指定されていればそれを評価
+            from .spencer import analyze_spencer
 
-        if not case.slip_surface:
-            return CaseResult(case=case, critical=None, evaluated=0)
-        res = analyze_spencer(section, case.slip_surface, case, grid.n_slices)
+            res = analyze_spencer(section, case.slip_surface, case, grid.n_slices)
+            return CaseResult(case=case, critical=res, evaluated=1 if res else 0)
+        # 未指定なら臨界な非円弧すべり面を自動探索
+        from .ncsearch import search_noncircular
+
+        res = search_noncircular(section, case, grid)
         return CaseResult(case=case, critical=res, evaluated=1 if res else 0)
 
     g = _auto_grid(section, grid)

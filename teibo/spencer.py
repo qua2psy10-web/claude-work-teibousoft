@@ -212,17 +212,17 @@ def _moment_residual(slices, fs, theta, kh) -> Optional[float]:
     return total
 
 
-def _force_fs(slices, theta, kh) -> Optional[float]:
+def _force_fs(slices, theta, kh, fs_grid: int = 80) -> Optional[float]:
     """与えた θ で力平衡 Σ Q=0 を満たす Fs を求める。
 
     力平衡残差は Fs が大きいほど負（起動項が優勢）、物理解 Fs に近づく
     ほど正に転じる。ただし Fs が小さいと層間力の分母 cos(α−θ)+…/Fs が
     非正となり残差が定義されない領域があるため、高 Fs 側から Fs を下げ
     ながら「定義された値どうしの最初の符号変化（負→正）」を挟んで
-    二分探索する。
+    二分探索する。fs_grid はスキャン刻み（探索時は粗くして高速化）。
     """
     # Fs グリッド（高→低）
-    n = 80
+    n = fs_grid
     fs_hi, fs_lo = 30.0, 0.2
     vals = []
     for i in range(n + 1):
@@ -257,7 +257,7 @@ def _force_fs(slices, theta, kh) -> Optional[float]:
 
 
 def solve_spencer(
-    slices: List[Slice], kh: float
+    slices: List[Slice], kh: float, scan_n: int = 111, fs_grid: int = 80
 ) -> Optional[Tuple[float, float]]:
     """スライス列に対しスペンサー法の (Fs, θ) を求める。
 
@@ -267,10 +267,12 @@ def solve_spencer(
       2. その Fs を代入したモーメント残差 h(θ)=Σ Q_i(x_i sinθ − y_i cosθ)
          が 0 となる θ を、符号変化を挟んで 1 次元二分探索する。
       3. その θ* における F_f(θ*) を安全率とする（力・モーメント両平衡成立）。
+
+    scan_n / fs_grid は走査の細かさ（探索用途では粗くして高速化する）。
     """
 
     def h(theta):
-        f = _force_fs(slices, theta, kh)
+        f = _force_fs(slices, theta, kh, fs_grid)
         if f is None:
             return None
         m = _moment_residual(slices, f, theta, kh)
@@ -279,7 +281,7 @@ def solve_spencer(
         return m, f
 
     # θ を細かく走査してモーメント残差の符号変化を探す（-50°..+60°）
-    n_scan = 111
+    n_scan = scan_n
     lo_deg, hi_deg = -50.0, 60.0
     prev = None
     for i in range(n_scan):
@@ -313,9 +315,8 @@ def solve_spencer(
                 return (fmid, mid) if fmid is not None else None
         prev = (th, m)
 
-    # 符号変化なし（層間力の影響が小さい）→ θ=0 の力平衡解を返す
-    f0 = _force_fs(slices, 0.0, kh)
-    return (f0, 0.0) if f0 is not None else None
+    # モーメント平衡を満たす θ が範囲内に存在しない → 有効なスペンサー解なし
+    return None
 
 
 def analyze_spencer(
@@ -323,8 +324,12 @@ def analyze_spencer(
     surface: List[Point],
     case: Optional[LoadCase] = None,
     n: int = 40,
+    coarse: bool = False,
 ) -> Optional[CircleResult]:
     """非円弧すべり面をスペンサー法で照査する。
+
+    coarse=True のときは θ 走査・Fs 走査を粗くして高速に評価する
+    （臨界すべり面の自動探索で多数の候補を評価する用途）。
 
     Returns:
         CircleResult（surface と theta を設定、xc/yc/r は 0）。解が
@@ -336,11 +341,22 @@ def analyze_spencer(
     slices = _build_poly_slices(section, surface, n, case)
     if slices is None:
         return None
-    sol = solve_spencer(slices, kh)
+    if coarse:
+        sol = solve_spencer(slices, kh, scan_n=45, fs_grid=32)
+    else:
+        sol = solve_spencer(slices, kh)
     if sol is None:
         return None
     fs, theta = sol
     if fs is None or fs <= 0 or not math.isfinite(fs):
+        return None
+    # 力・モーメント両平衡が実際に成立しているか検証（未収束解を棄却）
+    total_w = sum(s.weight for s in slices) or 1.0
+    fr = _force_residual(slices, fs, theta, kh)
+    mr = _moment_residual(slices, fs, theta, kh)
+    if fr is None or mr is None:
+        return None
+    if abs(fr) > 1e-3 * total_w or abs(mr) > 1e-3 * total_w * 30.0:
         return None
     return CircleResult(
         xc=0.0,
