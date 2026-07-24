@@ -126,13 +126,45 @@ def test_input_slip_surface_distributed_to_spencer_case():
     assert results[1].ok is False
 
 
-def test_spencer_case_without_surface_returns_none():
-    """slip_surface 未指定の spencer ケースは解析不能（critical=None）。"""
+def test_spencer_case_without_surface_auto_searches():
+    """slip_surface 未指定の spencer ケースは臨界非円弧面を自動探索する。"""
     sec = _section()
     case = LoadCase("s", kh=0.0, method="spencer")  # slip_surface なし
-    results = run_all(sec, [case], SearchGrid(n_slices=30))
-    assert results[0].critical is None
-    assert results[0].ok is False
+    results = run_all(sec, [case], SearchGrid(nx=10, ny=10, nr=8, n_slices=30, nc_nodes=5))
+    cr = results[0].critical
+    assert cr is not None
+    assert cr.surface is not None and len(cr.surface) >= 3
+    assert cr.theta is not None
+    # 求めた解は力・モーメント両平衡を満たす
+    fr = _force_residual(cr.slices, cr.fs, cr.theta, case.kh)
+    mr = _moment_residual(cr.slices, cr.fs, cr.theta, case.kh)
+    tw = sum(s.weight for s in cr.slices)
+    assert abs(fr) < 1e-3 * tw
+    assert abs(mr) < 1e-3 * tw * 30.0
+
+
+def test_noncircular_search_finds_base_slide():
+    """明確に弱い連続層があると、自動探索は円弧より低い基盤すべりを見つける。"""
+    from teibo.ncsearch import search_noncircular
+
+    sec = Section(
+        layers=[
+            SoilLayer("盛土", [Point(-5, 0), Point(0, 0), Point(10, 5), Point(13, 5), Point(23, 0), Point(40, 0)], 20, 21, 25, 32),
+            SoilLayer("極軟弱層", [Point(-5, -1.0), Point(40, -1.0)], 15, 15, 2, 1),
+            SoilLayer("支持層", [Point(-5, -2.0), Point(40, -2.0)], 19, 20, 40, 28),
+        ],
+        phreatic=PhreaticLine([Point(-5, -1.5), Point(40, -1.5)]),
+    )
+    grid = SearchGrid(nx=12, ny=12, nr=10, n_slices=40, nc_nodes=7)
+    case = LoadCase("常時", kh=0.0, method="spencer")
+    circ = run_all(sec, [LoadCase("c", kh=0.0, method="bishop")], grid)[0].critical
+    res = search_noncircular(sec, case, grid)
+    assert res is not None and res.surface is not None
+    # 基盤すべりが円弧よりはるかに危険（低い Fs）であることを検出
+    assert res.fs < circ.fs
+    # すべり面の最深部が軟弱層付近まで達している
+    ys = [p.y for p in res.surface]
+    assert min(ys) <= -0.9
 
 
 def test_example_noncircular_json():

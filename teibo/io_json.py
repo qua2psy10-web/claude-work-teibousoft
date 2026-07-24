@@ -162,6 +162,7 @@ def parse_input(data: Dict[str, Any]) -> AnalysisInput:
         x_entry_max=g.get("x_entry_max"),
         x_exit_min=g.get("x_exit_min"),
         x_exit_max=g.get("x_exit_max"),
+        nc_nodes=int(g.get("nc_nodes", 6)),
     )
 
     sensitivity: List[SensitivityTarget] = []

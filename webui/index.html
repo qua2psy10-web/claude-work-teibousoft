@@ -828,8 +828,8 @@ function spencerMomentResidual(slices, fs, theta, kh) {
   }
   return tot;
 }
-function spencerForceFs(slices, theta, kh) {
-  const nGrid = 80, fsHi = 30, fsLo = 0.2;
+function spencerForceFs(slices, theta, kh, fsGrid) {
+  const nGrid = fsGrid || 80, fsHi = 30, fsLo = 0.2;
   let prev = null;
   for (let i = 0; i <= nGrid; i++) {
     const fs = fsHi - (fsHi - fsLo) * i / nGrid;
@@ -853,14 +853,14 @@ function spencerForceFs(slices, theta, kh) {
   }
   return null;
 }
-function solveSpencer(slices, kh) {
+function solveSpencer(slices, kh, scanN, fsGrid) {
   const hFn = theta => {
-    const f = spencerForceFs(slices, theta, kh);
+    const f = spencerForceFs(slices, theta, kh, fsGrid);
     if (f == null) return null;
     const m = spencerMomentResidual(slices, f, theta, kh);
     return m == null ? null : { m, f };
   };
-  const nScan = 111, loDeg = -50, hiDeg = 60;
+  const nScan = scanN || 111, loDeg = -50, hiDeg = 60;
   let prev = null;
   for (let i = 0; i < nScan; i++) {
     const th = (loDeg + (hiDeg - loDeg) * i / (nScan - 1)) * Math.PI / 180;
@@ -878,23 +878,197 @@ function solveSpencer(slices, kh) {
           if (mlo * hm.m < 0) hi = mid; else { lo = mid; mlo = hm.m; }
         }
         const mid = 0.5 * (lo + hi);
-        const f = spencerForceFs(slices, mid, kh);
+        const f = spencerForceFs(slices, mid, kh, fsGrid);
         return f == null ? null : { fs: f, theta: mid };
       }
     }
     prev = [th, hv.m];
   }
-  const f0 = spencerForceFs(slices, 0, kh);
-  return f0 == null ? null : { fs: f0, theta: 0 };
+  // モーメント平衡を満たす θ が範囲内に存在しない → 有効な解なし
+  return null;
 }
-function analyzeSpencer(section, surface, caseObj, n) {
+function analyzeSpencer(section, surface, caseObj, n, coarse) {
   if (!surface || surface.length < 2) return null;
   const kh = caseObj ? caseObj.kh : 0;
   const slices = buildPolySlices(section, surface, n || 40, caseObj);
   if (!slices) return null;
-  const sol = solveSpencer(slices, kh);
+  const sol = coarse ? solveSpencer(slices, kh, 45, 32) : solveSpencer(slices, kh);
   if (!sol || sol.fs == null || sol.fs <= 0 || !isFinite(sol.fs)) return null;
+  // 力・モーメント両平衡が実際に成立しているか検証（未収束解を棄却）
+  const totalW = slices.reduce((a, s) => a + s.weight, 0) || 1;
+  const fr = spencerForceResidual(slices, sol.fs, sol.theta, kh);
+  const mr = spencerMomentResidual(slices, sol.fs, sol.theta, kh);
+  if (fr == null || mr == null) return null;
+  if (Math.abs(fr) > 1e-3 * totalW || Math.abs(mr) > 1e-3 * totalW * 30) return null;
   return { xc: 0, yc: 0, r: 0, fs: sol.fs, slices, surface: surface.map(p => [p[0], p[1]]), theta: sol.theta };
+}
+
+/* =========================================================================
+   非円弧すべり面の自動探索（座標降下法 + 複数シード）
+   ========================================================================= */
+const NC_THETA_MAX = 45 * Math.PI / 180;
+
+function ncGroundRange(section) {
+  const xs = section.layers[0].top.map(p => p[0]);
+  return [Math.min.apply(null, xs), Math.max.apply(null, xs)];
+}
+function ncLayerTop(layer) { return Math.min.apply(null, layer.top.map(p => p[1])); }
+function ncFloor(section, grid) {
+  if (grid && grid.y_lower_limit != null) return grid.y_lower_limit;
+  const gy = section.layers[0].top.map(p => p[1]);
+  const deepest = Math.min.apply(null, section.layers.map(ncLayerTop));
+  return Math.min(deepest + 0.2, Math.min.apply(null, gy) - 1.0);
+}
+function ncMakeSurface(entryX, exitX, ys, section) {
+  const k = ys.length, pts = [[entryX, surfaceY(section, entryX)]];
+  for (let i = 0; i < k; i++) {
+    const x = entryX + (exitX - entryX) * (i + 1) / (k + 1);
+    pts.push([x, ys[i]]);
+  }
+  pts.push([exitX, surfaceY(section, exitX)]);
+  return pts;
+}
+function ncFeasible(entryX, exitX, ys, section, floor, minSpan, minDepth) {
+  minSpan = minSpan || 1.0; minDepth = minDepth || 0.0;
+  if (exitX - entryX < Math.max(1.0, minSpan)) return false;
+  const ge = surfaceY(section, entryX), gx = surfaceY(section, exitX);
+  if (ge == null || gx == null) return false;
+  const k = ys.length; let maxDepth = 0;
+  for (let i = 0; i < k; i++) {
+    const x = entryX + (exitX - entryX) * (i + 1) / (k + 1);
+    const gy = surfaceY(section, x);
+    if (gy == null) return false;
+    if (ys[i] > gy - 0.3) return false;
+    if (ys[i] < floor - 1e-9) return false;
+    maxDepth = Math.max(maxDepth, gy - ys[i]);
+  }
+  if (maxDepth < minDepth) return false;
+  const surf = ncMakeSurface(entryX, exitX, ys, section);
+  for (let j = 0; j < surf.length - 1; j++) {
+    const xm = 0.5 * (surf[j][0] + surf[j + 1][0]);
+    const gy = surfaceY(section, xm), ym = 0.5 * (surf[j][1] + surf[j + 1][1]);
+    if (gy != null && ym > gy - 0.05) return false;
+  }
+  // 凸性: 基面傾角 α が入口→出口で単調増加（ジグザグ排除）
+  const tol = 3 * Math.PI / 180; let prevA = null;
+  for (let j = 0; j < surf.length - 1; j++) {
+    const a = Math.atan2(surf[j + 1][1] - surf[j][1], surf[j + 1][0] - surf[j][0]);
+    if (prevA != null && a < prevA - tol) return false;
+    prevA = a;
+  }
+  return true;
+}
+function ncEvaluate(entryX, exitX, ys, section, caseObj, floor, n, minSpan, minDepth) {
+  if (!ncFeasible(entryX, exitX, ys, section, floor, minSpan, minDepth)) return Infinity;
+  const surf = ncMakeSurface(entryX, exitX, ys, section);
+  const res = analyzeSpencer(section, surf, caseObj, n, true);
+  if (!res || !isFinite(res.fs) || res.fs <= 0) return Infinity;
+  if (res.theta != null && Math.abs(res.theta) > NC_THETA_MAX) return Infinity;
+  return res.fs;
+}
+function ncCircleSeed(section, cr, k) {
+  if (!cr.slices || !cr.slices.length) return null;
+  const entryX = cr.slices[0].xMid - cr.slices[0].width / 2;
+  const exitX = cr.slices[cr.slices.length - 1].xMid + cr.slices[cr.slices.length - 1].width / 2;
+  const ys = [];
+  for (let i = 0; i < k; i++) {
+    const x = entryX + (exitX - entryX) * (i + 1) / (k + 1);
+    const dx = x - cr.xc;
+    ys.push(Math.abs(dx) > cr.r ? cr.yc - cr.r : cr.yc - Math.sqrt(cr.r * cr.r - dx * dx));
+  }
+  return [entryX, exitX, ys];
+}
+function ncWeakLayerSeed(section, k, floor) {
+  if (section.layers.length < 2) return null;
+  let weak = section.layers[1];
+  for (let i = 1; i < section.layers.length; i++)
+    if (section.layers[i].c + section.layers[i].phi < weak.c + weak.phi) weak = section.layers[i];
+  const yWeak = ncLayerTop(weak) - 0.5;
+  const [xmin, xmax] = ncGroundRange(section);
+  const entryX = xmin + (xmax - xmin) * 0.35, exitX = xmin + (xmax - xmin) * 0.75;
+  const ge = surfaceY(section, entryX), gx = surfaceY(section, exitX);
+  if (ge == null || gx == null) return null;
+  const ys = [];
+  for (let i = 0; i < k; i++) {
+    const t = (i + 1) / (k + 1), ramp = Math.min(t, 1 - t) * 3.0;
+    ys.push(Math.max(Math.min(yWeak, Math.min(ge, gx) - 0.5 - ramp), floor));
+  }
+  return [entryX, exitX, ys];
+}
+function ncOptimize(seed, section, caseObj, grid, floor, n, budget) {
+  let [entryX, exitX, ys] = seed; ys = ys.slice();
+  const [xmin, xmax] = ncGroundRange(section);
+  const span = exitX - entryX, margin = Math.max(span * 0.35, 3.0);
+  let exMin = Math.max(entryX - margin, xmin), exMax = Math.min(exitX + margin, xmax);
+  if (grid && grid.x_entry_min != null) exMin = Math.max(exMin, grid.x_entry_min);
+  if (grid && grid.x_exit_max != null) exMax = Math.min(exMax, grid.x_exit_max);
+  let seedDepth = 0;
+  for (let i = 0; i < ys.length; i++) {
+    const x = entryX + (exitX - entryX) * (i + 1) / (ys.length + 1);
+    const gy = surfaceY(section, x);
+    if (gy != null) seedDepth = Math.max(seedDepth, gy - ys[i]);
+  }
+  const minSpan = span * 0.55, minDepth = Math.max(seedDepth * 0.5, 1.0);
+  const ev = (a, b, yy) => ncEvaluate(a, b, yy, section, caseObj, floor, n, minSpan, minDepth);
+  let bestFs = ev(entryX, exitX, ys);
+  let step = Math.max((exitX - entryX) / (ys.length + 1), 1.0) * 0.6;
+  for (let it = 0; it < budget; it++) {
+    let improved = false;
+    for (let i = 0; i < ys.length; i++) for (const d of [-step, step]) {
+      const trial = ys.slice(); trial[i] += d;
+      const fs = ev(entryX, exitX, trial);
+      if (fs < bestFs - 1e-6) { ys = trial; bestFs = fs; improved = true; }
+    }
+    for (const d of [-step, step]) {
+      const nx = Math.min(Math.max(entryX + d, exMin), exitX - minSpan);
+      const fs = ev(nx, exitX, ys);
+      if (fs < bestFs - 1e-6) { entryX = nx; bestFs = fs; improved = true; }
+    }
+    for (const d of [-step, step]) {
+      const nx = Math.max(Math.min(exitX + d, exMax), entryX + minSpan);
+      const fs = ev(entryX, nx, ys);
+      if (fs < bestFs - 1e-6) { exitX = nx; bestFs = fs; improved = true; }
+    }
+    if (!improved) { step *= 0.5; if (step < 0.15) break; }
+  }
+  return { fs: bestFs, params: [entryX, exitX, ys] };
+}
+function searchNoncircular(section, caseObj, grid) {
+  const k = Math.max(2, (grid && grid.nc_nodes) || 6);
+  const floor = ncFloor(section, grid);
+  const nSearch = 16, nFinal = Math.max((grid && grid.n_slices) || 30, 30);
+  const seeds = [];
+  // 円弧臨界円シード（フェレニウス法）
+  const circCase = Object.assign({}, caseObj, { method: 'fellenius', slip_surface: null });
+  const circ = searchCritical(section, circCase, grid);
+  if (circ.critical) {
+    const cs = ncCircleSeed(section, circ.critical, k);
+    if (cs) {
+      seeds.push(cs);
+      const [e0, e1, ys0] = cs, base = surfaceY(section, 0.5 * (e0 + e1)) || 0;
+      seeds.push([e0, e1, ys0.map(y => Math.max(base - (base - y) * 1.35, floor))]);
+    }
+  }
+  const ws = ncWeakLayerSeed(section, k, floor);
+  if (ws) seeds.push(ws);
+  if (!seeds.length) return null;
+
+  let bestFs = Infinity, bestSurf = null;
+  for (const seed of seeds) {
+    const o = ncOptimize(seed, section, caseObj, grid, floor, nSearch, 12);
+    if (o.fs < bestFs) {
+      bestFs = o.fs;
+      const [ex0, ex1, ys] = o.params;
+      bestSurf = ncMakeSurface(ex0, ex1, ys, section);
+    }
+  }
+  // ベースライン: 円弧シード面をそのままスペンサー評価
+  const [b0, b1, bys] = seeds[0];
+  const baseRes = analyzeSpencer(section, ncMakeSurface(b0, b1, bys, section), caseObj, nFinal, false);
+  const finalRes = (bestSurf && isFinite(bestFs)) ? analyzeSpencer(section, bestSurf, caseObj, nFinal, false) : null;
+  const cands = [finalRes, baseRes].filter(r => r && isFinite(r.fs));
+  if (!cands.length) return null;
+  return cands.reduce((a, b) => a.fs <= b.fs ? a : b);
 }
 
 /* =========================================================================
@@ -960,10 +1134,12 @@ function refine(section, caseObj, seed, g, passes) {
 
 function searchCritical(section, caseObj, grid) {
   if (caseObj.method === 'spencer') {
-    if (!caseObj.slip_surface || caseObj.slip_surface.length < 2) {
-      return { case: caseObj, critical: null, evaluated: 0 };
+    if (caseObj.slip_surface && caseObj.slip_surface.length >= 2) {
+      const res = analyzeSpencer(section, caseObj.slip_surface, caseObj, (grid && grid.n_slices) || 40);
+      return { case: caseObj, critical: res, evaluated: res ? 1 : 0 };
     }
-    const res = analyzeSpencer(section, caseObj.slip_surface, caseObj, (grid && grid.n_slices) || 40);
+    // すべり面未指定 → 臨界な非円弧すべり面を自動探索
+    const res = searchNoncircular(section, caseObj, grid);
     return { case: caseObj, critical: res, evaluated: res ? 1 : 0 };
   }
   const g = autoGrid(section, grid);
@@ -1791,13 +1967,23 @@ function renderSheet() {
   if (hasSpencer) {
     const dSlip = el('details', { class: 'card', open: '' }, el('summary', null, '非円弧すべり面（スペンサー法）'));
     const bodyS = el('div', { class: 'card-body' });
-    bodyS.append(el('p', { class: 'hint' },
-      'すべり面を折れ線（左→右）で指定します。始端・終端は地表面上に、中間は地盤内に取ります。スペンサー法のケースで使用されます。'));
-    if (!state.slip_surface || state.slip_surface.length < 2) {
-      state.slip_surface = state.slip_surface && state.slip_surface.length
-        ? state.slip_surface : [[9, 4.5], [13, -2.2], [21, -2.2], [24, 0]];
+    const auto = !state.slip_surface;
+    bodyS.append(el('label', { class: 'chk' }, el('input', {
+      type: 'checkbox', checked: auto, onchange: ev => {
+        if (ev.target.checked) delete state.slip_surface;
+        else state.slip_surface = [[9, 4.5], [13, -2.2], [21, -2.2], [24, 0]];
+        renderSheet(); syncFromForm();
+      }
+    }), ' すべり面を自動探索する（座標降下法で臨界な非円弧面を探索）'));
+    if (auto) {
+      bodyS.append(el('p', { class: 'hint' },
+        '円弧臨界円・軟弱層を初期形状として、凸なすべり面を最適化し最小 Fs を探します。'
+        + '計算にやや時間がかかります（数秒）。'));
+    } else {
+      bodyS.append(el('p', { class: 'hint' },
+        'すべり面を折れ線（左→右）で指定します。始端・終端は地表面上に、中間は地盤内に取ります。'));
+      bodyS.append(pointsTable(state.slip_surface, () => { renderSheet(); }));
     }
-    bodyS.append(pointsTable(state.slip_surface, () => { renderSheet(); }));
     dSlip.append(bodyS);
     sheet.append(dSlip);
   }
